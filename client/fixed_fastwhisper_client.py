@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class StableFastWhisperClient:
-    def __init__(self, server_uri="ws://35.153.73.151:8765"):
+    def __init__(self, server_uri="ws://3.84.215.173:8765"):
         self.server_uri = server_uri
         self.websocket = None
         
@@ -891,7 +891,7 @@ def main():
         else:
             server_uri = server_choice
     else:
-        server_uri = "ws://35.153.73.151:8765"
+        server_uri = "ws://3.84.215.173:8765"
     
     client = StableFastWhisperClient(server_uri)
     

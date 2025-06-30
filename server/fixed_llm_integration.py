@@ -123,9 +123,56 @@ class FixedLLMPeriodontalIntegration:
                 "confidence": 0.0
             }
     
+    # ДОПОЛНИТЕЛЬНАЯ ФУНКЦИЯ для исправления ASR промпта в FastWhisper
+    def get_dental_asr_prompt():
+        """
+        Возвращает улучшенный промпт для FastWhisper ASR
+        """
+        return """
+        Dental examination recording. Common terms: 
+        probing depth, bleeding on probing, suppuration, mobility grade, furcation class, 
+        gingival margin, missing teeth, tooth number, buccal surface, lingual surface, 
+        distal, mesial, millimeter, grade 1 2 3, class 1 2 3, 
+        teeth numbers 1 through 32, one two three four five six seven eight nine ten.
+        """
+
+        # ФУНКЦИЯ для добавления промпта в ASR
+    def enhance_asr_with_dental_prompt(asr_model, audio_data):
+        """
+        Добавляет dental промпт в ASR транскрипцию
+        """
+        try:
+            dental_prompt = get_dental_asr_prompt()
+            
+            segments, info = asr_model.transcribe(
+                audio_data,
+                language="en",
+                condition_on_previous_text=False,
+                temperature=0.0,
+                vad_filter=False,
+                beam_size=1,
+                best_of=1,
+                without_timestamps=True,
+                word_timestamps=False,
+                initial_prompt=dental_prompt,  # ДОБАВЛЯЕМ DENTAL ПРОМПТ
+                suppress_blank=True,
+                suppress_tokens=[-1],
+                log_prob_threshold=-1.0,
+                no_speech_threshold=0.6,
+                compression_ratio_threshold=2.4,
+            )
+            
+            return segments, info
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced ASR: {e}")
+            # Fallback без промпта
+            return asr_model.transcribe(audio_data, language="en")
+        
+    
     def is_periodontal_command_liberal(self, text: str) -> bool:
         """
-        ОЧЕНЬ ЛИБЕРАЛЬНАЯ проверка periodontal команд с ОТЛАДКОЙ
+        ИСПРАВЛЕННАЯ ОЧЕНЬ ЛИБЕРАЛЬНАЯ проверка periodontal команд с ОТЛАДКОЙ
         """
         if not self.enabled:
             logger.warning(f"🚨 LLM not enabled for liberal detection: '{text}'")
@@ -144,7 +191,7 @@ class FixedLLMPeriodontalIntegration:
             'rubbing', 'robin', 'buckle', 'wingle', 'lingle', 'lingwal', 'teath', 
             'suppration', 'separation', 'furkat', 'cache', 'mobil', 'probin', 
             'bleedin', 'gingi', 'tool', 'two', 'tree', 'for', 'ate', 'sick', 'sex',
-            'occal',  # ДОБАВЛЕНО: новая ошибка
+            'occal', 'this', 'that', 'too', 'to',  # ДОБАВЛЕНО: критические слова
             
             # Дополнительные ASR ошибки
             'propping', 'proving', 'poking', 'booking', 'looking', 'cooking',
@@ -170,7 +217,7 @@ class FixedLLMPeriodontalIntegration:
         # Проверяем длину (dental команды обычно не очень короткие)
         reasonable_length = len(text.split()) >= 2
         
-        # Исключаем очевидно НЕ dental команды
+        # ИСПРАВЛЕННЫЕ исключения - более умные
         exclusions = [
             'hello', 'hi', 'bye', 'goodbye', 'thank you', 'thanks',
             'weather', 'time', 'date', 'calendar', 'schedule',
@@ -178,8 +225,14 @@ class FixedLLMPeriodontalIntegration:
             'call', 'phone', 'email', 'message', 'text'
         ]
         
-        is_excluded = any(excl in text_lower for excl in exclusions)
-        found_exclusions = [excl for excl in exclusions if excl in text_lower]
+        # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: проверяем ПОЛНЫЕ фразы, а не отдельные слова
+        is_excluded = any(excl in text_lower for excl in exclusions if len(excl) > 3)
+        
+        # ОСОБАЯ ОБРАБОТКА для "too" - исключаем только если это НЕ dental контекст
+        if 'too' in text_lower and has_keyword and ('missing' in text_lower or 'tooth' in text_lower):
+            is_excluded = False  # НЕ исключаем dental команды с "too"
+        
+        found_exclusions = [excl for excl in exclusions if excl in text_lower and len(excl) > 3]
         
         # ЛИБЕРАЛЬНОЕ решение: активируем LLM если есть хоть какие-то признаки dental команды
         result = (has_keyword or has_numbers) and reasonable_length and not is_excluded
@@ -190,6 +243,12 @@ class FixedLLMPeriodontalIntegration:
         logger.info(f"   🔢 Numbers found: {has_numbers} - {found_numbers}")
         logger.info(f"   📏 Reasonable length: {reasonable_length} ({len(text.split())} words)")
         logger.info(f"   ❌ Excluded: {is_excluded} - {found_exclusions}")
+        
+        # СПЕЦИАЛЬНАЯ ПРОВЕРКА для "missing this" паттернов
+        if 'missing' in text_lower and ('this' in text_lower or 'too' in text_lower or 'that' in text_lower):
+            result = True  # ПРИНУДИТЕЛЬНО активируем для missing команд
+            logger.info(f"   🎯 SPECIAL CASE: Missing command with 'this/too/that' - FORCED ACTIVATION")
+        
         logger.info(f"   🎯 FINAL DECISION: {result}")
         
         if result:

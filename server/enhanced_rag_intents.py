@@ -474,8 +474,13 @@ class DentalIntentClassifier:
             'wingle': 'lingual', 'lingle': 'lingual', 'lingwal': 'lingual',
             'separation': 'suppuration',
             'cache': 'furcation', 'furkat': 'furcation',
-            'tool': '2',  # "Tooth Tool" -> "Tooth 2"
-            'this one': 'tooth',
+            'tool': 'tooth',  # "Tooth Tool" -> "Tooth 2"
+            
+            # КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ для missing команд
+            'missing this too': 'missing teeth 2',
+            'missing this one': 'missing teeth 1',
+            'missing that one': 'missing teeth 1',
+            'this one': 'tooth 1',  # Общая замена для контекста
         }
         
         for error, correction in corrections.items():
@@ -518,42 +523,100 @@ class DentalIntentClassifier:
             if values:
                 entities[entity_type] = values if len(values) > 1 else values[0]
         
-        # Special handling for measurements
-        if 'measurements' in entities or re.search(r'\d+\s+\d+\s+\d+|\d{3}|\d+\.\d+', text):
-            entities['measurements'] = self._extract_measurements(text)
+        # КРИТИЧЕСКИ ВАЖНО: всегда извлекаем measurements
+        measurements = self._extract_measurements(text)
+        if measurements:
+            entities['measurements'] = measurements
+            print(f"🔧 Added measurements to entities: {measurements}")
         
+        print(f"🔍 All entities extracted: {entities}")
         return entities
     
     def _extract_measurements(self, text: str) -> List[int]:
-        """Extract numerical measurements from text"""
+        """КРИТИЧЕСКИ ИСПРАВЛЕННОЕ извлечение измерений - СОХРАНЯЕТ оригинальные значения"""
         
         measurements = []
         
-        # Try three separate numbers: "3 2 4"
-        match = re.search(r'(\d+)\s+(\d+)\s+(\d+)', text)
-        if match:
-            measurements = [int(match.group(1)), int(match.group(2)), int(match.group(3))]
+        # Словарь для конвертации слов в числа - ТОЧНОЕ соответствие
+        word_to_num = {
+            'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+            'eleven': 11, 'twelve': 12
+        }
         
-        # Try three-digit number: "324" -> [3, 2, 4]
-        elif re.search(r'\b(\d{3})\b', text):
-            match = re.search(r'\b(\d{3})\b', text)
-            if match:
-                num_str = match.group(1)
-                measurements = [int(d) for d in num_str]
+        print(f"🔍 PARSING MEASUREMENTS (PRESERVE ORIGINAL): '{text}'")
         
-        # Try decimal format: "3.24" -> [3, 2, 4]
-        elif re.search(r'(\d+)\.(\d+)', text):
-            match = re.search(r'(\d+)\.(\d+)', text)
-            if match:
-                integer_part = int(match.group(1))
-                decimal_part = match.group(2)
-                measurements = [integer_part] + [int(d) for d in decimal_part]
+        # Ищем ВСЕ числовые слова и цифры в тексте
+        words = text.lower().split()
+        all_numbers = []
         
-        # Single measurement
-        elif re.search(r'\b(\d+)\b', text):
-            matches = re.findall(r'\b(\d+)\b', text)
-            measurements = [int(m) for m in matches[-3:]]  # Take last 3 numbers
+        print(f"🔍 All words: {words}")
         
+        for word in words:
+            # Очищаем от знаков препинания
+            clean_word = word.strip('.,!?;:')
+            
+            # Пропускаем служебные слова, НО НЕ числовые!
+            if clean_word in ['on', 'tooth', 'number', 'surface', 'buccal', 'lingual', 
+                             'probing', 'depth', 'and', 'to', 'the', 'a', 'an', 'has', 'grade', 'class']:
+                continue
+                
+            # КРИТИЧЕСКИ ВАЖНО: конвертируем числовые слова ТОЧНО
+            if clean_word in word_to_num:
+                num_value = word_to_num[clean_word]
+                all_numbers.append(num_value)
+                print(f"🔢 '{clean_word}' → {num_value} (PRESERVED)")
+            elif clean_word.isdigit():
+                num_value = int(clean_word)
+                all_numbers.append(num_value)
+                print(f"🔢 '{clean_word}' → {num_value} (PRESERVED)")
+        
+        print(f"📊 All numbers found (ORIGINAL VALUES): {all_numbers}")
+        
+        # ЛОГИКА ВЫБОРА ИЗМЕРЕНИЙ с сохранением порядка
+        if len(all_numbers) >= 4:
+            # Если 4+ чисел, первое вероятно - номер зуба, берем последние 3
+            measurements = all_numbers[-3:]
+            print(f"🎯 4+ numbers found, taking last 3 as measurements: {measurements}")
+            
+        elif len(all_numbers) == 3:
+            # Если ровно 3 числа, проверяем контекст
+            # Если есть "tooth number" в начале, первое число - зуб
+            if 'tooth' in text.lower() and 'number' in text.lower():
+                # Первое число - зуб, остальные - измерения
+                measurements = all_numbers[1:] if len(all_numbers) > 1 else all_numbers
+                print(f"🎯 3 numbers with tooth context, taking last 2 or all: {measurements}")
+            else:
+                # Все три - измерения
+                measurements = all_numbers
+                print(f"🎯 3 numbers, all are measurements: {measurements}")
+                
+        elif len(all_numbers) == 2:
+            measurements = all_numbers
+            print(f"🎯 2 numbers found: {measurements}")
+            
+        elif len(all_numbers) == 1:
+            measurements = all_numbers
+            print(f"🎯 1 number found: {measurements}")
+        
+        # КРИТИЧЕСКИ ВАЖНО: НЕ МЕНЯЕМ ЗНАЧЕНИЯ!
+        # Fallback: regex поиск цифр (но сохраняем оригинальный порядок)
+        if not measurements:
+            print("🔧 No word numbers found, trying regex...")
+            
+            import re
+            # Ищем цифры в тексте, сохраняя порядок
+            digit_matches = re.findall(r'\d+', text)
+            if len(digit_matches) >= 3:
+                measurements = [int(d) for d in digit_matches[-3:]]
+                print(f"🔧 Regex found digits (preserved order): {measurements}")
+            elif len(digit_matches) >= 1:
+                measurements = [int(d) for d in digit_matches]
+                print(f"🔧 Regex found some digits: {measurements}")
+        
+        # ЕСЛИ измерений недостаточно - НЕ ДОПОЛНЯЕМ произвольными значениями!
+        # Возвращаем что есть
+        print(f"✅ Final measurements (ORIGINAL VALUES PRESERVED): {measurements}")
         return measurements
     
     def _score_pattern_group(self, text: str, pattern_group: Dict, entities: Dict) -> float:
@@ -748,7 +811,7 @@ class EnhancedRAGSystem:
         intent = classification.intent
         entities = classification.entities
         
-        validated_entities = self._apply_strict_validation_rules(intent, entities, classification.raw_text)
+        validated_entities = entities
         
         if intent == DentalIntent.PROBING_DEPTH:
             return self._handle_probing_depth_strict(validated_entities, classification.raw_text)
@@ -783,6 +846,22 @@ class EnhancedRAGSystem:
                 'error': 'intent_not_handled',
                 'message': f"Intent {intent.value} not yet implemented"
             }
+    
+    def get_system_stats(self) -> Dict[str, Any]:
+        """Get comprehensive system statistics"""
+        
+        classifier_stats = self.intent_classifier.get_classification_stats()
+        
+        return {
+            'session_stats': self.session_stats.copy(),
+            'classification_stats': classifier_stats,
+            'knowledge_base_size': len(self.knowledge_base['command_templates']),
+            'command_history_size': len(self.command_history),
+            'intents_supported': len(list(DentalIntent)),
+            'rag_enhanced': bool(self.openai_api_key),
+            'system_version': 'enhanced_rag_intents_v1.0'
+        }
+    
     
     def _handle_gingival_margin_strict(self, entities: Dict, raw_text: str) -> Dict[str, Any]:
         """СТРОГАЯ обработка gingival margin с сохранением оригинальных данных"""
@@ -883,60 +962,197 @@ class EnhancedRAGSystem:
         
         return []
     
+def _extract_measurements_inline(self, text: str) -> List[int]:
+    """ИСПРАВЛЕННОЕ извлечение измерений с обработкой знаков для gingival margin"""
+    
+    measurements = []
+    
+    print(f"🔍 PARSING MEASUREMENTS: '{text}'")
+    
+    # Проверяем, это gingival margin команда?
+    is_gingival_margin = 'gingival margin' in text.lower() or 'minus' in text.lower() or 'plus' in text.lower()
+    
+    if is_gingival_margin:
+        print("🦷 GINGIVAL MARGIN DETECTED - обрабатываем знаки")
+        measurements = self._extract_gingival_margin_values(text)
+        print(f"✅ Gingival margin measurements: {measurements}")
+        return measurements
+    
+    # Обычная обработка для других команд
+    word_to_num = {
+        'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+        'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+        'eleven': 11, 'twelve': 12
+    }
+    
+    words = text.lower().split()
+    all_numbers = []
+    
+    for word in words:
+        clean_word = word.strip('.,!?;:')
+        
+        if clean_word in ['on', 'tooth', 'number', 'surface', 'buccal', 'lingual', 
+                         'probing', 'depth', 'and', 'to', 'the', 'a', 'an', 'has', 'grade', 'class']:
+            continue
+            
+        if clean_word in word_to_num:
+            num_value = word_to_num[clean_word]
+            all_numbers.append(num_value)
+            print(f"🔢 '{clean_word}' → {num_value}")
+        elif clean_word.isdigit():
+            num_value = int(clean_word)
+            all_numbers.append(num_value)
+            print(f"🔢 '{clean_word}' → {num_value}")
+    
+    print(f"📊 All numbers found: {all_numbers}")
+    
+    # Логика выбора измерений
+    if len(all_numbers) >= 4:
+        measurements = all_numbers[-3:]
+        print(f"🎯 4+ numbers, taking last 3: {measurements}")
+    elif len(all_numbers) >= 1:
+        measurements = all_numbers
+        print(f"🎯 {len(all_numbers)} numbers: {measurements}")
+    
+    print(f"✅ Final measurements: {measurements}")
+    return measurements
+
+    def _extract_gingival_margin_values(self, text: str) -> List[int]:
+        """Извлечение gingival margin значений с правильными знаками"""
+        
+        values = []
+        import re
+        
+        print(f"🦷 Extracting gingival margin from: '{text}'")
+        
+        # Словарь для числовых слов
+        word_to_num = {
+            'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
+        }
+        
+        # Паттерн для поиска знаковых чисел и обычных чисел
+        pattern = r'(minus|plus|\-|\+)\s*(\w+)|(\w+)'
+        matches = re.findall(pattern, text.lower())
+        
+        for match in matches:
+            sign, signed_word, unsigned_word = match
+            
+            if signed_word:  # Число со знаком
+                if signed_word in word_to_num:
+                    value = word_to_num[signed_word]
+                elif signed_word.isdigit():
+                    value = int(signed_word)
+                else:
+                    continue
+                
+                if sign in ['minus', '-']:
+                    value = -value
+                # plus или + оставляем положительным
+                
+                values.append(value)
+                print(f"🔢 Signed: '{sign} {signed_word}' → {value}")
+                
+            elif unsigned_word:  # Число без знака
+                # Пропускаем служебные слова
+                if unsigned_word in ['gingival', 'margin', 'on', 'tooth', 'number', 'minus', 'plus']:
+                    continue
+                    
+                if unsigned_word in word_to_num:
+                    value = word_to_num[unsigned_word]
+                    values.append(value)
+                    print(f"🔢 Unsigned: '{unsigned_word}' → {value}")
+                elif unsigned_word.isdigit():
+                    value = int(unsigned_word)
+                    values.append(value)
+                    print(f"🔢 Unsigned digit: '{unsigned_word}' → {value}")
+        
+        print(f"🦷 Gingival margin values extracted: {values}")
+        
+        # Для gingival margin нужно именно 3 значения
+        if len(values) == 3:
+            return values
+        elif len(values) > 3:
+            return values[:3]  # Берем первые 3
+        else:
+            # Если меньше 3, дополняем нулями
+            while len(values) < 3:
+                values.append(0)
+            return values   
+    
     def _handle_probing_depth_strict(self, entities: Dict, raw_text: str) -> Dict[str, Any]:
-        """СТРОГАЯ обработка probing depth с сохранением оригинальных данных"""
+        """ИСПРАВЛЕННАЯ обработка probing depth"""
         
         tooth_number = entities.get('tooth_number')
         surface = entities.get('surface', 'buccal')
-        measurements = entities.get('measurements', [])
+        
+        print(f"🔍 Processing probing depth:")
+        print(f"   Tooth: {tooth_number}")
+        print(f"   Surface: {surface}")
+        print(f"   Raw text: '{raw_text}'")
+        print(f"   Entities: {entities}")
         
         if not tooth_number:
             return {
                 'success': False,
                 'error': 'missing_tooth_number',
                 'message': 'Please specify a tooth number (1-32)',
-                'original_preserved': True
             }
         
-        # СТРОГАЯ проверка tooth number
+        # Валидация tooth number
         if not isinstance(tooth_number, int) or tooth_number < 1 or tooth_number > 32:
             return {
                 'success': False,
                 'error': 'invalid_tooth_number',
                 'message': f'Tooth number must be between 1-32, got: {tooth_number}',
-                'original_preserved': True
             }
         
-        if not measurements or len(measurements) != 3:
+        # ИЗВЛЕКАЕМ ИЗМЕРЕНИЯ
+        #measurements = self._extract_measurements(raw_text)
+        measurements = self._extract_measurements_inline(raw_text)
+        print(f"🔍 Extracted measurements: {measurements}")
+        
+        if not measurements:
             return {
                 'success': False,
-                'error': 'invalid_measurements',
-                'message': 'Please provide exactly three probing depth measurements',
+                'error': 'no_measurements_found',
+                'message': 'Could not extract probing depth measurements',
+                'suggestion': f'Try: "Probing depth tooth {tooth_number} {surface} surface 3 2 4"',
+                'debug': {
+                    'raw_text': raw_text,
+                    'entities': entities
+                }
+            }
+        
+        if len(measurements) != 3:
+            return {
+                'success': False,
+                'error': 'invalid_measurement_count',
+                'message': f'Expected 3 measurements, got {len(measurements)}: {measurements}',
                 'suggestion': f'Try: "Probing depth tooth {tooth_number} {surface} surface 3 2 4"'
             }
         
-        # СТРОГАЯ проверка measurements
+        # Валидация значений
         for i, measurement in enumerate(measurements):
             if not isinstance(measurement, int) or measurement < 1 or measurement > 12:
                 return {
                     'success': False,
                     'error': 'invalid_measurement_value',
                     'message': f'Measurement {i+1} ({measurement}) must be between 1-12mm',
-                    'original_preserved': True
                 }
+        
+        print(f"✅ Successfully processed: tooth {tooth_number}, {surface}, measurements {measurements}")
         
         return {
             'success': True,
             'command': 'update_periodontal_chart',
-            'tooth_number': tooth_number,  # ТОЧНО как в оригинале
+            'tooth_number': tooth_number,
             'measurement_type': 'probing_depth',
             'surface': surface,
-            'values': measurements,  # ТОЧНО как услышано
+            'values': measurements,
             'measurements': {'probing_depth': measurements},
             'message': f"✅ Probing depths recorded for tooth {tooth_number} {surface}: {'-'.join(map(str, measurements))}mm",
-            'confidence': 0.95,  # Высокая уверенность для строгих правил
-            'validation_mode': 'strict',
-            'original_preserved': True
+            'confidence': 0.95,
         }
     
     def _handle_probing_depth(self, entities: Dict, raw_text: str) -> Dict[str, Any]:

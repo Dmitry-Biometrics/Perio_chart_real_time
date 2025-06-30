@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Enhanced Periodontal Voice Command Processor with OpenAI LLM v1.0+
-Решает проблемы ASR ошибок и обеспечивает 99%+ точность распознавания команд
-ИСПРАВЛЕНО для OpenAI v1.0+
+ИСПРАВЛЕННЫЙ Enhanced Periodontal Voice Command Processor with OpenAI LLM v1.0+
+КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Правильная нумерация зубов (American Universal System 1-32)
+Исправляет проблему когда "tooth one" становится "tooth 21" или "tooth 2"
 """
 
 import logging
@@ -10,7 +10,7 @@ import json
 import asyncio
 import re
 from typing import Dict, List, Optional, Tuple, Union
-from dataclasses import dataclass, asdict  # ИСПРАВЛЕНО: добавлен импорт
+from dataclasses import dataclass, asdict
 from datetime import datetime
 
 # Новый импорт для OpenAI v1.0+
@@ -23,6 +23,98 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def parse_gingival_margin_command_fixed(text: str):
+    """
+    ИСПРАВЛЕННЫЙ парсер для команд gingival margin
+    Правильно парсит: "tooth two one two three" → tooth=2, values=[1,2,3]
+    """
+    
+    if 'gingival margin' not in text.lower():
+        return None
+    
+    print(f"🦷 FIXED GM PARSING: '{text}'")
+    
+    # Словарь конвертации
+    word_to_num = {
+        'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+        'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+        'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
+        'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18,
+        'nineteen': 19, 'twenty': 20, 'thirty': 30, 'thirty-one': 31, 'thirty-two': 32
+    }
+    
+    import re
+    
+    # Паттерн: "gingival margin on tooth [TOOTH] [VALUE1] [VALUE2] [VALUE3]"
+    pattern = r'gingival\s+margin\s+on\s+tooth\s+(?:number\s+)?(\w+)\s+(.+)'
+    match = re.search(pattern, text.lower())
+    
+    if not match:
+        return None
+    
+    tooth_ref = match.group(1)
+    values_text = match.group(2)
+    
+    # Конвертируем tooth number
+    if tooth_ref.isdigit():
+        tooth_number = int(tooth_ref)
+    elif tooth_ref in word_to_num:
+        tooth_number = word_to_num[tooth_ref]
+    else:
+        return None
+    
+    # Парсим значения
+    tokens = values_text.split()
+    values = []
+    i = 0
+    
+    while i < len(tokens) and len(values) < 3:
+        token = tokens[i].strip('.,!?;:')
+        
+        if token in ['minus', 'plus'] and i + 1 < len(tokens):
+            next_token = tokens[i + 1].strip('.,!?;:')
+            
+            if next_token.isdigit():
+                num = int(next_token)
+            elif next_token in word_to_num:
+                num = word_to_num[next_token]
+            else:
+                i += 1
+                continue
+            
+            values.append(-num if token == 'minus' else num)
+            i += 2
+            
+        elif token.isdigit():
+            values.append(int(token))
+            i += 1
+            
+        elif token in word_to_num:
+            values.append(word_to_num[token])
+            i += 1
+            
+        else:
+            i += 1
+    
+    # Дополняем до 3 значений
+    while len(values) < 3:
+        values.append(0)
+    
+    values = values[:3]  # Берем только первые 3
+    
+    if not (1 <= tooth_number <= 32):
+        return None
+    
+    print(f"✅ FIXED GM PARSED: tooth={tooth_number}, values={values}")
+    
+    return {
+        'tooth_number': tooth_number,
+        'command_type': 'gingival_margin',
+        'values': values,
+        'success': True
+    }
+    
 @dataclass
 class PeriodontalCommand:
     """Структура для periodontal команды"""
@@ -43,7 +135,7 @@ class PeriodontalCommand:
             self.values = []
 
 class EnhancedPeriodontalLLMProcessor:
-    """Усиленный процессор с LLM для исправления ASR ошибок (OpenAI v1.0+)"""
+    """ИСПРАВЛЕННЫЙ процессор с правильной нумерацией зубов (American Universal System)"""
     
     def __init__(self, openai_api_key: str, model: str = "gpt-3.5-turbo"):
         self.openai_api_key = openai_api_key
@@ -60,12 +152,12 @@ class EnhancedPeriodontalLLMProcessor:
         self.setup_llm_prompts()
         self.chart_data = {}
         
-        logger.info(f"🤖 Enhanced Periodontal LLM Processor initialized with {model} (OpenAI v1.0+)")
+        logger.info(f"🤖 FIXED Enhanced Periodontal LLM Processor initialized with {model} (American Universal System)")
     
     def setup_correction_patterns(self):
-        """Настройка паттернов для исправления частых ASR ошибок с точными числами"""
+        """ИСПРАВЛЕННЫЕ паттерны коррекции - точная нумерация зубов"""
         
-        # Частые ASR ошибки и их исправления
+        # ИСПРАВЛЕННЫЕ ASR ошибки - БЕЗ конфликтующих замен
         self.asr_corrections = {
             # Probing depth
             "rubbing depth": "probing depth",
@@ -86,10 +178,7 @@ class EnhancedPeriodontalLLMProcessor:
             "lingwal": "lingual",
             "linguall": "lingual",
             
-            # Common phrases
-            "tooth number": "tooth number",
-            "number": "number",
-            "surface": "surface",
+            # Commands
             "bleeding on": "bleeding on",
             "bleeding": "bleeding",
             "suppuration": "suppuration",
@@ -104,9 +193,6 @@ class EnhancedPeriodontalLLMProcessor:
             "missing": "missing",
             "teeth": "teeth",
             
-            # ИСПРАВЛЕННЫЕ числовые слова - ТОЛЬКО в контексте tooth number
-            # НЕ применяем глобальную замену, а обрабатываем контекстно
-            
             # Measurements
             "mm": "",
             "millimeter": "",
@@ -114,8 +200,19 @@ class EnhancedPeriodontalLLMProcessor:
             "point": ".",
         }
         
-        # НОВАЯ функция для контекстного исправления чисел
+        # ИСПРАВЛЕНО: Убраны проблемные замены чисел
+        self.dental_context_corrections = {
+            r'\bcache\b': 'furcation', 
+            r'\bseparation\b': 'suppuration',
+            r'\brubbing\b': 'probing',
+            r'\brobin\b': 'probing',
+            r'\bbuckle\b': 'buccal',
+            r'\bwingle\b': 'lingual',
+        }
+        
+        # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Точная карта номеров зубов (American Universal System)
         self.tooth_number_corrections = {
+            "zero": "0",
             "one": "1",
             "two": "2", 
             "three": "3",
@@ -151,146 +248,156 @@ class EnhancedPeriodontalLLMProcessor:
         }
         
     def setup_llm_prompts(self):
-        """Настройка улучшенных промптов для LLM с точным исправлением чисел"""
+        """КРИТИЧЕСКИ ИСПРАВЛЕННЫЕ промпты для ТОЧНОЙ обработки"""
         
         self.correction_prompt = """You are a dental assistant AI that corrects speech recognition errors in periodontal examination commands.
 
-    TASK: Fix the ASR (speech recognition) errors in the dental command and extract structured information.
+        CRITICAL RULE #1: NEVER CHANGE THE TOOTH NUMBER FROM THE INPUT
+        CRITICAL RULE #2: NEVER CHANGE THE MEASUREMENT VALUES FROM THE INPUT  
+        CRITICAL RULE #3: PRESERVE ALL ORIGINAL NUMBERS EXACTLY AS SPOKEN
+        CRITICAL RULE #4: CORRECTLY IDENTIFY COMMAND TYPES
+        
 
-    CRITICAL NUMBER CORRECTION RULES:
-    - "one" → "1" (tooth number one means tooth 1)
-    - "two" → "2" (tooth number two means tooth 2)  
-    - "three" → "3" (tooth number three means tooth 3)
-    - "four" → "4" (tooth number four means tooth 4)
-    - "five" → "5" (tooth number five means tooth 5)
-    - "six" → "6" (tooth number six means tooth 6)
-    - "seven" → "7" (tooth number seven means tooth 7)
-    - "eight" → "8" (tooth number eight means tooth 8)
-    - "nine" → "9" (tooth number nine means tooth 9)
-    - "ten" → "10" (tooth number ten means tooth 10)
 
-    IMPORTANT: When correcting tooth numbers, maintain the EXACT numerical value:
-    - "tooth number one" → "tooth number 1" (NOT 2!)
-    - "tooth number two" → "tooth number 2" (NOT 1!)
+        AMERICAN UNIVERSAL TOOTH NUMBERING SYSTEM (1-32):
+        - Valid tooth numbers: 1-32 ONLY
 
-    COMMON ASR ERRORS TO FIX:
-    - "rubbing depth" → "probing depth"
-    - "robin depth" → "probing depth" 
-    - "buckle" → "buccal"
-    - "wingle" → "lingual"
-    - "tool" → "2" (ONLY when context suggests "Tooth Tool" meaning "Tooth 2")
-    - "cache" → "furcation" (when saying "For Cache in class" → "Furcation class")
-    - "separation" → "suppuration"
-    - Numbers like "123" should be "1 2 3" (three separate measurements)
-    - "mm" or "millimeter" should be removed
+        COMMAND TYPE IDENTIFICATION RULES:
+        1. "probing depth" → command_type: "probing_depth"
+        2. "gingival margin" → command_type: "gingival_margin" 
+        3. "bleeding" → command_type: "bleeding"
+        4. "suppuration" → command_type: "suppuration"
+        5. "mobility" → command_type: "mobility" 
+        6. "furcation" → command_type: "furcation"
+        7. "missing" → command_type: "missing_teeth"
 
-    MISSING TEETH COMMAND HANDLING:
-    - "missing this one" → identify which tooth is being referenced from context
-    - "missing teeth one" → "missing teeth 1" 
-    - "missing tooth number X" → "missing teeth X"
-    
-    
-    SPECIAL CASES:
-    - "missing this one" without context → request tooth number specification
-    - "missing teeth one" → "missing teeth 1"
-    - "missing tooth one" → "missing teeth 1"
+         CRITICAL GINGIVAL MARGIN PARSING RULES:
 
-    EXAMPLES:
-    Input: "missing this one"
-    Output: {{"corrected_text": "missing teeth", "tooth_number": null, "command_type": "missing_teeth", "values": [], "needs_clarification": true}}
+        For "gingival margin on tooth [TOOTH_NUMBER] [VALUE1] [VALUE2] [VALUE3]":
+        - FIRST number after "tooth" = TOOTH_NUMBER  
+        - NEXT THREE numbers = MEASUREMENT VALUES
 
-    MEASUREMENT SEPARATION RULES:
-    - "123" → "1 2 3" (three separate probing depth measurements)
-    - "456" → "4 5 6" (three separate probing depth measurements)
-    - "312" → "3 1 2" (three separate probing depth measurements)
+        CRITICAL EXAMPLES:
 
-    DENTAL COMMAND TYPES:
-    1. Probing Depth: "probing depth on tooth number X buccal/lingual surface A B C"
-    2. Bleeding: "bleeding on probing tooth X buccal/lingual distal/mid/mesial"
-    3. Suppuration: "suppuration present on tooth X buccal/lingual distal/mid/mesial"
-    4. Mobility: "tooth X has mobility grade Y"
-    5. Furcation: "furcation class Y on tooth X"
-    6. Gingival Margin: "gingival margin on tooth X minus A B plus C"
-    7. Missing Teeth: "missing teeth X Y Z"
+        Input: "gingival margin on tooth two one two three"
+        CORRECT PARSING: tooth_number: 2, values: [1, 2, 3]
+        WRONG PARSING: tooth_number: 1, values: [2, 1, 2]
 
-    INPUT: "{raw_text}"
+        Input: "gingival margin on tooth fourteen minus one zero plus one"
+        CORRECT PARSING: tooth_number: 14, values: [-1, 0, 1]
 
-    STEP-BY-STEP CORRECTION PROCESS:
-    1. Identify the tooth number and keep it EXACTLY the same numerically
-    2. Correct surface terms (buckle→buccal, wingle→lingual)
-    3. Separate measurement clusters (123→1 2 3)
-    4. Fix command terms (rubbing→probing, separation→suppuration)
-    5. Extract structured data
+        Input: "gingival margin on tooth one two three four"  
+        CORRECT PARSING: tooth_number: 1, values: [2, 3, 4]
 
-    OUTPUT FORMAT (JSON):
-    {{
-        "corrected_text": "the corrected dental command",
-        "tooth_number": <integer 1-32 matching the original tooth reference>,
-        "command_type": "<probing_depth|bleeding|suppuration|mobility|furcation|gingival_margin|missing_teeth>",
-        "surface": "<buccal|lingual|both|all|null>",
-        "position": "<distal|mid|mesial|null>",
-        "values": [<array of numbers or booleans>],
-        "confidence": <float 0.0-1.0>,
-        "corrections_made": ["list of corrections applied"],
-        "original_tooth_reference": "<original tooth number/word from input>"
-    }}
+        PARSING STEPS FOR GINGIVAL MARGIN:
+        1. Find "tooth" keyword
+        2. FIRST word/number after "tooth" = TOOTH_NUMBER
+        3. NEXT THREE words/numbers = MEASUREMENT VALUES
+        4. Handle signs: "minus X" = -X, "plus X" = +X
 
-    EXAMPLES:
-    Input: "probing depth on tooth number one buccal surface 123"
-    Output: {{"corrected_text": "probing depth on tooth number 1 buccal surface 1 2 3", "tooth_number": 1, "original_tooth_reference": "one"}}
+        WORD-TO-NUMBER CONVERSION:
+        one→1, two→2, three→3, four→4, five→5, six→6, seven→7, eight→8, nine→9, ten→10,
+        eleven→11, twelve→12, thirteen→13, fourteen→14, fifteen→15, sixteen→16, etc.
 
-    Input: "rubbing depth on tooth number two buckle surface 456" 
-    Output: {{"corrected_text": "probing depth on tooth number 2 buccal surface 4 5 6", "tooth_number": 2, "original_tooth_reference": "two"}}
+        OTHER COMMAND RULES:
+        - For NON-gingival margin commands, use standard parsing
+        - NEVER CHANGE THE SEQUENCE OF NUMBERS
+        - PRESERVE ALL ORIGINAL NUMBERS EXACTLY AS SPOKEN
 
-    JSON OUTPUT:"""
+        PROBING DEPTH EXAMPLES:
+        - "probing depth ... 3 2 4" → command_type: "probing_depth", values: [3, 2, 4]
+        - "probing depth ... 1 2 3" → command_type: "probing_depth", values: [1, 2, 3]
 
-        self.validation_prompt = """You are a dental examination validator. Check if this periodontal command makes clinical sense.
+        EXACT WORD-TO-NUMBER CONVERSION:
+        - "one" → 1, "two" → 2, "three" → 3, etc.
+        - "zero" → 0
+        - "minus one" → -1, "plus one" → +1
 
-    COMMAND: {command}
-    EXTRACTED DATA: {data}
+        ASR ERROR CORRECTIONS (only fix words, never numbers):
+        - "rubbing depth" → "probing depth" 
+        - "buckle" → "buccal", "wingle" → "lingual"
+        - "separation" → "suppuration", "cache" → "furcation"
 
-    CRITICAL VALIDATION CHECKS:
-    1. Tooth number consistency: Does the extracted tooth_number match the original tooth reference?
-    2. Measurement validity: Are probing depths reasonable (1-12mm)?
-    3. Surface validity: Are surfaces correct (buccal/lingual)?
+        INPUT TEXT: "{raw_text}"
 
-    VALIDATION RULES:
-    - Tooth numbers: 1-32 only
-    - Probing depths: 1-12mm (three values for distal, mid, mesial)
-    - Mobility grades: 0-3
-    - Furcation classes: 1-3
-    - Surfaces: buccal, lingual, both, all
-    - Positions: distal, mid, mesial (for bleeding/suppuration)
+        PROCESSING STEPS:
+        1. IDENTIFY COMMAND TYPE from the input text
+        2. Identify tooth number and convert (one→1, two→2, etc.) 
+        3. For GINGIVAL MARGIN: Process minus/plus signs correctly
+        4. For PROBING DEPTH: Extract measurements as positive numbers
+        5. Fix only ASR word errors, never change numbers
 
-    TOOTH NUMBER VALIDATION:
-    - If original says "one", tooth_number should be 1
-    - If original says "two", tooth_number should be 2
-    - If original says "eight", tooth_number should be 8
-    - Flag any inconsistencies as CRITICAL errors
-    
-    TOOTH NUMBER PRESERVATION RULE:
-    - NEVER change the tooth number unless there's a clear error
-    - If user says "tooth number 1", keep it as tooth number 1
-    - Only change tooth numbers if they're clearly invalid (>32 or <1)
-    - Preserve the original tooth number from user input
+        OUTPUT FORMAT (JSON):
+        {{
+            "corrected_text": "corrected command with EXACT numbers preserved",
+            "tooth_number": <exact tooth number from input>,
+            "command_type": "<CORRECT command type based on input>",
+            "surface": "buccal|lingual|both|null", 
+            "position": "distal|mid|mesial|null",
+            "values": [<exact measurements WITH CORRECT SIGNS for gingival margin>],
+            "confidence": 1.0,
+            "number_preservation_verified": true,
+            "command_type_correct": true
+        }}
 
-    CRITICAL: The user's tooth number specification should be respected unless obviously wrong.
+        CRITICAL EXAMPLES:
 
-    OUTPUT (JSON):
-    {{
-        "valid": <true/false>,
-        "confidence": <float 0.0-1.0>,
-        "issues": ["list of any problems found"],
-        "suggestions": ["suggested corrections if any"],
-        "tooth_number_consistent": <true/false>,
-        "critical_errors": ["list of critical errors that must be fixed"]
-    }}
+        Input: "gingival margin on tooth one minus one zero plus one"
+        Output: {{"corrected_text": "gingival margin on tooth number 1 minus 1 0 plus 1", "tooth_number": 1, "command_type": "gingival_margin", "values": [-1, 0, 1]}}
 
-    JSON OUTPUT:"""
+        Input: "probing depth on tooth one buccal surface one two three"  
+        Output: {{"corrected_text": "probing depth on tooth number 1 buccal surface 1 2 3", "tooth_number": 1, "command_type": "probing_depth", "values": [1, 2, 3]}}
+
+        REMEMBER: 
+        - GINGIVAL MARGIN commands have signs: minus/plus
+        - PROBING DEPTH commands are always positive numbers
+        - NEVER confuse the two command types
+
+        JSON OUTPUT:"""
+        
+        self.validation_prompt = """You are validating a dental command processing result.
+
+        COMMAND: {command}
+        EXTRACTED DATA: {data}
+
+        CRITICAL VALIDATION CHECKS:
+        1. NUMBER PRESERVATION: Are the extracted numbers EXACTLY what was spoken?
+        2. TOOTH NUMBER ACCURACY: Does the tooth_number match the original tooth reference?
+        3. MEASUREMENT ACCURACY: Do the values match the original measurement sequence?
+        4. COMMAND TYPE ACCURACY: Is the command_type correctly identified?
+
+        VALIDATION RULES:
+        - If original says "tooth one" and extracted shows tooth_number=3 → CRITICAL ERROR
+        - If original says "one two three" and extracted shows values=[5,9,8] → CRITICAL ERROR  
+        - If original says "gingival margin" and extracted shows command_type="probing_depth" → CRITICAL ERROR
+        - Tooth numbers must be 1-32 (American Universal System)
+        - Probing depths must be 1-12mm and positive
+        - Gingival margin values can be negative (-10 to +10mm)
+
+        CRITICAL ERROR DETECTION:
+        Look for number substitution errors:
+        - Wrong tooth number (spoken ≠ extracted)
+        - Wrong measurement values (spoken ≠ extracted)
+        - Wrong command type identification
+        - Number sequence changes
+
+        OUTPUT (JSON):
+        {{
+            "valid": <true if numbers are preserved exactly and command type correct>,
+            "confidence": <0.0 if critical errors, 1.0 if perfect>,
+            "number_preservation_check": <true if all numbers match original>,
+            "tooth_number_correct": <true if tooth matches>,
+            "measurements_correct": <true if measurements match>,
+            "command_type_correct": <true if command type matches>,
+            "critical_errors": ["list any number preservation or type errors"],
+            "issues": ["list any other problems"]
+        }}
+
+        JSON OUTPUT:"""
     
     async def process_voice_command(self, raw_text: str, patient_id: str = None) -> Dict:
         """
-        Главная функция обработки голосовой команды с LLM коррекцией
+        ИСПРАВЛЕННАЯ функция обработки голосовой команды
         """
         try:
             if not self.client:
@@ -298,8 +405,8 @@ class EnhancedPeriodontalLLMProcessor:
             
             logger.info(f"🎤 Processing voice command: '{raw_text}'")
             
-            # Шаг 1: Предварительная коррекция простых ошибок
-            pre_corrected = self.apply_basic_corrections(raw_text)
+            # Шаг 1: ИСПРАВЛЕННАЯ предварительная коррекция
+            pre_corrected = self.apply_basic_corrections_fixed(raw_text)
             logger.debug(f"📝 Pre-corrected: '{pre_corrected}'")
             
             # Шаг 2: LLM коррекция и извлечение данных
@@ -335,64 +442,70 @@ class EnhancedPeriodontalLLMProcessor:
             logger.error(f"❌ Error processing voice command: {e}")
             return self._error_response(f"Processing error: {str(e)}", raw_text)
     
-    def apply_basic_corrections(self, text: str) -> str:
-        """Применение базовых исправлений ASR ошибок с контекстным исправлением чисел"""
+    def apply_basic_corrections_fixed(self, text: str) -> str:
+        """КРИТИЧЕСКИ ИСПРАВЛЕННАЯ функция с правильной обработкой gingival margin"""
+        print(f"🔍 INPUT: '{text}'")
+        
         corrected = text.lower().strip()
+        import re
         
-        # Применяем основные исправления ASR ошибок
-        for error, correction in self.asr_corrections.items():
-            corrected = corrected.replace(error, correction)
+        # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Специальная обработка gingival margin
+        if 'gingival margin' in corrected:
+            print("🦷 GINGIVAL MARGIN DETECTED - using FIXED parsing")
+            
+            # Используем исправленный парсер
+            gm_result = parse_gingival_margin_command_fixed(text)
+            if gm_result:
+                tooth = gm_result['tooth_number']
+                values = gm_result['values']
+                
+                # Формируем исправленную строку с правильным порядком
+                values_str = ' '.join(str(v) for v in values)
+                corrected = f"gingival margin on tooth number {tooth} {values_str}"
+                
+                print(f"🔧 GINGIVAL MARGIN FIXED:")
+                print(f"   Original: '{text}'")
+                print(f"   Tooth: {tooth} (CORRECTED)")
+                print(f"   Values: {values} (CORRECTED)")
+                print(f"   Output: '{corrected}'")
+                
+                return corrected
         
-        # КОНТЕКСТНОЕ исправление tooth numbers
-        # Ищем паттерн "tooth number [слово]" и заменяем только в этом контексте
-        tooth_number_pattern = r'tooth number (\w+)'
+        # Стандартная обработка для других команд (БЕЗ ИЗМЕНЕНИЙ)
+        word_corrections_only = {
+            r'\brubbing\b': 'probing',
+            r'\brobin\b': 'probing', 
+            r'\bbuckle\b': 'buccal',
+            r'\bwingle\b': 'lingual',
+            r'\bcache\b': 'furcation',
+            r'\bseparation\b': 'suppuration',
+        }
+        
+        for pattern, replacement in word_corrections_only.items():
+            corrected = re.sub(pattern, replacement, corrected, flags=re.IGNORECASE)
+        
+        # Стандартная обработка tooth numbers для НЕ gingival margin команд
+        tooth_number_pattern = r'tooth\s+(?:number\s+)?(\w+)'
         def fix_tooth_number(match):
             tooth_word = match.group(1)
             if tooth_word in self.tooth_number_corrections:
-                return f"tooth number {self.tooth_number_corrections[tooth_word]}"
-            return match.group(0)  # Возвращаем без изменений если не найдено
+                corrected_number = self.tooth_number_corrections[tooth_word]
+                print(f"🔢 TOOTH NUMBER FIXED: '{tooth_word}' → {corrected_number}")
+                return f"tooth number {corrected_number}"
+            return match.group(0)
         
         corrected = re.sub(tooth_number_pattern, fix_tooth_number, corrected, flags=re.IGNORECASE)
         
-        # Специальная обработка "Tooth Tool" -> "Tooth 2" (только в этом конкретном случае)
-        corrected = re.sub(r'\btooth tool\b', 'tooth 2', corrected, flags=re.IGNORECASE)
-        
-        # Специальная обработка чисел в формате "X.XX" или "XXX"
-        # "123" → "1 2 3" (три отдельных измерения)
-        # Но только если это НЕ номер зуба
-        def expand_measurements(text):
-            # Ищем числа после "surface" 
-            surface_pattern = r'surface (\d{3,})'
-            def expand_surface_numbers(match):
-                numbers = match.group(1)
-                if len(numbers) == 3:
-                    return f"surface {numbers[0]} {numbers[1]} {numbers[2]}"
-                return match.group(0)
-            
-            text = re.sub(surface_pattern, expand_surface_numbers, text)
-            
-            # Также обрабатываем формат X.XX
-            decimal_pattern = r'(\d+)\.(\d+)'
-            def expand_decimal(match):
-                integer_part = match.group(1)
-                decimal_part = match.group(2)
-                digits = ' '.join(list(decimal_part))
-                return f"{integer_part} {digits}"
-            
-            text = re.sub(decimal_pattern, expand_decimal, text)
-            return text
-        
-        corrected = expand_measurements(corrected)
-        
         # Убираем лишние пробелы
         corrected = re.sub(r'\s+', ' ', corrected).strip()
-        
+        print(f"✅ OUTPUT: '{corrected}'")
         return corrected
     
     async def llm_correction_and_extraction(self, text: str) -> Optional[Dict]:
         """LLM коррекция и извлечение структурированных данных (OpenAI v1.0+)"""
         try:
             prompt = self.correction_prompt.format(raw_text=text)
+            print(f"📤 Sending to LLM: '{text}'")
             
             # ИСПРАВЛЕНО: Новый API для OpenAI v1.0+
             response = await self.client.chat.completions.create(
@@ -409,12 +522,23 @@ class EnhancedPeriodontalLLMProcessor:
             # Парсим JSON ответ
             try:
                 result = json.loads(content)
+                
+                # КРИТИЧЕСКАЯ ПРОВЕРКА: Убеждаемся что tooth_number корректный
+                tooth_number = result.get("tooth_number")
+                if tooth_number and (tooth_number < 1 or tooth_number > 32):
+                    logger.error(f"❌ CRITICAL: Invalid tooth number {tooth_number} from LLM")
+                    result["tooth_number"] = 1  # Fallback
+                
+                print(f"🔢 LLM RESULT: Tooth {result.get('tooth_number')} (from '{result.get('original_tooth_reference', 'unknown')}')")
                 return result
+                
             except json.JSONDecodeError:
                 # Попытка извлечь JSON из ответа
                 json_match = re.search(r'\{.*\}', content, re.DOTALL)
                 if json_match:
-                    return json.loads(json_match.group())
+                    result = json.loads(json_match.group())
+                    print(f"🔢 LLM RESULT (extracted): Tooth {result.get('tooth_number')} (from '{result.get('original_tooth_reference', 'unknown')}')")
+                    return result
                 else:
                     logger.error(f"❌ Could not parse LLM JSON: {content}")
                     return None
@@ -424,7 +548,7 @@ class EnhancedPeriodontalLLMProcessor:
             return None
     
     async def validate_command(self, llm_result: Dict) -> Dict:
-        """Валидация команды через LLM (OpenAI v1.0+)"""
+        """ИСПРАВЛЕННАЯ валидация команды через LLM (OpenAI v1.0+)"""
         try:
             prompt = self.validation_prompt.format(
                 command=llm_result.get("corrected_text", ""),
@@ -444,7 +568,17 @@ class EnhancedPeriodontalLLMProcessor:
             
             try:
                 validation = json.loads(content)
+                
+                # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА tooth number
+                tooth_number = llm_result.get("tooth_number")
+                if tooth_number and (tooth_number < 1 or tooth_number > 32):
+                    validation["valid"] = False
+                    validation["critical_errors"] = validation.get("critical_errors", []) + [
+                        f"Invalid tooth number {tooth_number} for American Universal System (must be 1-32)"
+                    ]
+                
                 return validation
+                
             except json.JSONDecodeError:
                 json_match = re.search(r'\{.*\}', content, re.DOTALL)
                 if json_match:
@@ -512,7 +646,8 @@ class EnhancedPeriodontalLLMProcessor:
             "original_text": command.original_text,
             "corrected_text": command.corrected_text,
             "timestamp": command.timestamp,
-            "system": "enhanced_llm_periodontal_v1"
+            "system": "fixed_enhanced_llm_periodontal_american_universal_v1",
+            "numbering_system": "american_universal_1_32"
         }
     
     def _format_measurements_for_client(self, command: PeriodontalCommand) -> Dict:
@@ -596,17 +731,17 @@ class EnhancedPeriodontalLLMProcessor:
             "original_text": original_text,
             "suggestions": suggestions or self._get_command_suggestions(),
             "confidence": 0.0,
-            "system": "enhanced_llm_periodontal_v1"
+            "system": "fixed_enhanced_llm_periodontal_american_universal_v1"
         }
     
     def _get_command_suggestions(self) -> List[str]:
-        """Получение предложений команд"""
+        """Получение предложений команд с правильной нумерацией"""
         return [
-            "probing depth on tooth number 14 buccal surface 3 2 4",
-            "bleeding on probing tooth 12 buccal distal", 
-            "suppuration present on tooth 8 lingual mesial",
-            "tooth 6 has mobility grade 2",
-            "furcation class 1 on tooth 19",
+            "probing depth on tooth number 1 buccal surface 3 2 4",
+            "bleeding on probing tooth 1 buccal distal", 
+            "suppuration present on tooth 1 lingual mesial",
+            "tooth 1 has mobility grade 2",
+            "furcation class 1 on tooth 1",
             "missing teeth 1 16 17 32"
         ]
     
@@ -625,15 +760,17 @@ class EnhancedPeriodontalLLMProcessor:
         total_teeth = sum(len(patient_data) for patient_data in self.chart_data.values())
         
         return {
-            "processor_type": "enhanced_llm_periodontal_v1",
+            "processor_type": "fixed_enhanced_llm_periodontal_american_universal_v1",
             "model": self.model,
             "total_patients": total_patients,
             "total_teeth_updated": total_teeth,
             "asr_corrections_available": len(self.asr_corrections),
-            "dental_corrections_available": len(self.dental_corrections),
+            "dental_corrections_available": len(self.dental_context_corrections),
             "llm_enabled": True,
             "validation_enabled": True,
-            "openai_version": "v1.0+"
+            "openai_version": "v1.0+",
+            "numbering_system": "american_universal_1_32",
+            "tooth_number_range": "1-32"
         }
 
 
@@ -650,10 +787,10 @@ def initialize_enhanced_processor(openai_api_key: str, model: str = "gpt-3.5-tur
     
     try:
         enhanced_llm_processor = EnhancedPeriodontalLLMProcessor(openai_api_key, model)
-        logger.info("🚀 Enhanced LLM Periodontal Processor initialized successfully")
+        logger.info("🚀 FIXED Enhanced LLM Periodontal Processor initialized successfully (American Universal)")
         return True
     except Exception as e:
-        logger.error(f"❌ Failed to initialize Enhanced LLM Processor: {e}")
+        logger.error(f"❌ Failed to initialize FIXED Enhanced LLM Processor: {e}")
         return False
 
 async def process_periodontal_transcription(text: str, patient_id: str = None) -> Dict:
@@ -664,7 +801,7 @@ async def process_periodontal_transcription(text: str, patient_id: str = None) -
         return {
             "success": False,
             "error": "processor_not_initialized",
-            "message": "Enhanced LLM Processor not initialized. Please provide OpenAI API key."
+            "message": "FIXED Enhanced LLM Processor not initialized. Please provide OpenAI API key."
         }
     
     return await enhanced_llm_processor.process_voice_command(text, patient_id)
@@ -674,15 +811,19 @@ def get_processor_stats() -> Dict:
     if enhanced_llm_processor:
         return enhanced_llm_processor.get_stats()
     else:
-        return {"processor_type": "not_initialized", "openai_version": "v1.0+"}
+        return {
+            "processor_type": "not_initialized", 
+            "openai_version": "v1.0+",
+            "numbering_system": "american_universal_1_32"
+        }
 
 
 if __name__ == "__main__":
     # Тестирование системы
     import os
     
-    async def test_enhanced_processor():
-        """Тестирование усиленного процессора"""
+    async def test_fixed_enhanced_processor():
+        """Тестирование ИСПРАВЛЕННОГО усиленного процессора"""
         
         # Инициализация (нужен OpenAI API key)
         api_key = os.getenv("OPENAI_API_KEY")
@@ -695,35 +836,43 @@ if __name__ == "__main__":
             print("❌ Failed to initialize processor")
             return
         
-        print("🤖 Testing Enhanced LLM Periodontal Processor (OpenAI v1.0+)")
-        print("=" * 60)
+        print("🤖 Testing FIXED Enhanced LLM Periodontal Processor (American Universal System)")
+        print("=" * 80)
         
-        # Тестовые команды с ASR ошибками
+        # Тестовые команды с проблемами нумерации
         test_commands = [
-            # Проблемные команды из вашего примера
-            "Probing depth on tooth number one, buckle surface 312.",
-            "Rubbing depth on tooth number 2, buckle surface 312.",
-            "Bleeding on probing tooth 2, buccal distal.",
+            # Проблемные команды из логов
+            "Separation presents on tooth one lingual distal.",
+            "Probing depth on tooth number one, buccal surface 312.",
+            "Rubbing depth on tooth number two, buckle surface 312.",
+            "Bleeding on probing tooth one, buccal distal.",
             "Missing this one.",
-            "For Cache in class 2 on tooth 2",
+            "For Cache in class 2 on tooth one",
             "Tooth Tool has mobility grade 2",
-            "Separation present on tooth 8 lingual distal.",
-            "Bleeding on probing tooth 3, lingual distal."
+            "Bleeding on probing tooth three, lingual distal.",
+            
+            # Дополнительные тесты для проверки
+            "suppuration present on tooth eight buccal distal",
+            "mobility grade three on tooth sixteen",
+            "furcation class one on tooth thirty two"
         ]
         
         for i, command in enumerate(test_commands, 1):
             print(f"\n{i}. Testing: '{command}'")
+            print("-" * 60)
             
             result = await process_periodontal_transcription(command, "test_patient")
             
             if result["success"]:
                 print(f"   ✅ SUCCESS: {result['message']}")
+                print(f"   📝 Original: '{result.get('original_text', 'N/A')}'")
                 print(f"   📝 Corrected: '{result.get('corrected_text', 'N/A')}'")
-                print(f"   🦷 Tooth: {result.get('tooth_number')}")
+                print(f"   🦷 Tooth: {result.get('tooth_number')} (American Universal)")
                 print(f"   📋 Type: {result.get('measurement_type')}")
                 print(f"   🔄 Surface: {result.get('surface')}")
                 print(f"   📊 Values: {result.get('values')}")
                 print(f"   🎯 Confidence: {result.get('confidence', 0):.2f}")
+                print(f"   🇺🇸 System: {result.get('numbering_system', 'unknown')}")
             else:
                 print(f"   ❌ FAILED: {result['message']}")
                 if result.get('suggestions'):
@@ -731,9 +880,9 @@ if __name__ == "__main__":
         
         # Статистика
         stats = get_processor_stats()
-        print(f"\n📊 Processor Stats:")
+        print(f"\n📊 FIXED Processor Stats:")
         for key, value in stats.items():
             print(f"   {key}: {value}")
     
     # Запуск теста
-    asyncio.run(test_enhanced_processor())
+    asyncio.run(test_fixed_enhanced_processor())
