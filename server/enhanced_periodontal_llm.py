@@ -256,8 +256,18 @@ class EnhancedPeriodontalLLMProcessor:
         CRITICAL RULE #2: NEVER CHANGE THE MEASUREMENT VALUES FROM THE INPUT  
         CRITICAL RULE #3: PRESERVE ALL ORIGINAL NUMBERS EXACTLY AS SPOKEN
         CRITICAL RULE #4: CORRECTLY IDENTIFY COMMAND TYPES
+            CRITICAL: In dental contexts, number words always refer to tooth numbers (1-32):
+        - "too" = "two" = tooth number 2
+        - "to" = "two" = tooth number 2  
+        - "for" = "four" = tooth number 4
+        - "ate" = "eight" = tooth number 8
+        - "won" = "one" = tooth number 1
         
-
+        EASUREMENT PARSING RULES:
+        1. Probing depth measurements are ALWAYS exactly 3 values: distal, mid, mesial
+        2. "through" in dental context is often ASR error for separate measurements
+        3. "one through eight" likely means "one two nine" or similar 3 measurements
+        4. NEVER interpret as ranges - always as individual measurements
 
         AMERICAN UNIVERSAL TOOTH NUMBERING SYSTEM (1-32):
         - Valid tooth numbers: 1-32 ONLY

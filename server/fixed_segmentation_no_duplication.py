@@ -72,8 +72,8 @@ class FixedClientBufferNoDrop:
         self.silence_threshold = config.get('segmentation_silence_threshold', 0.15)  # Понижено с 0.25
         self.min_command_duration = config.get('min_command_duration', 0.8)
         self.max_command_duration = config.get('max_command_duration', 20.0)
-        self.speech_confirmation_chunks = config.get('speech_confirmation_chunks', 2)  # Понижено с 3
-        self.silence_confirmation_chunks = config.get('silence_confirmation_chunks', 6)  # Понижено с 8
+        self.speech_confirmation_chunks = config.get('speech_confirmation_chunks', 1)  # Понижено с 3
+        self.silence_confirmation_chunks = config.get('silence_confirmation_chunks', 3)  # Понижено с 8
         
         # Энергетические пороги
         self.energy_threshold = 0.001
