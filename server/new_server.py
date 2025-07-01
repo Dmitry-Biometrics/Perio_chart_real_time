@@ -32,7 +32,7 @@ from instant_server_integration import (
     handle_asr_client_with_instant_commands
 )
 
-from instant_commands_simple import create_processor_with_instant_commands
+
 
 logger = logging.getLogger(__name__)
 
@@ -1995,12 +1995,10 @@ async def main():
     try:
         logger.info("🔧 Инициализация КРИТИЧЕСКИ ИСПРАВЛЕННОГО ENHANCED процессора...")
         #processor = CriticallyFixedProcessorWithSegmentation()
+        #processor = create_processor_with_instant_commands(base_processor, web_clients)
         base_processor = CriticallyFixedProcessorWithSegmentation()
-        processor = create_processor_with_instant_commands(base_processor, web_clients)
-        
-        if processor is None:
-            logger.error("❌ Failed to create processor!")
-            return
+        processor =create_enhanced_processor_with_instant_commands(base_processor, web_clients)
+
         #enhanced_processor = create_enhanced_processor_with_instant_commands(base_processor, web_clients)  # Ссылка на set() веб-клиентов
         
         if processor.asr.model is None:
@@ -2027,21 +2025,12 @@ async def main():
         logger.info("🌐 Запуск КРИТИЧЕСКИ ИСПРАВЛЕННЫХ WebSocket серверов...")
         
         # Создание серверов
-        asr_server = await websockets.serve(
-            handle_asr_client,
-            "0.0.0.0",
-            ASR_PORT,
-            max_size=15 * 1024 * 1024,
-            ping_interval=20,
-            ping_timeout=10,
-            close_timeout=5,
-            compression=None
-        )
+
         async def enhanced_asr_handler(websocket):
-            await handle_asr_client_with_instant_commands(websocket, enhanced_processor)
+            await handle_asr_client_with_instant_commands(websocket, processor)
         
         asr_server = await websockets.serve(
-            enhanced_asr_handler,      
+            enhanced_asr_handler,
             "0.0.0.0",
             ASR_PORT,
             max_size=15 * 1024 * 1024,
@@ -2050,7 +2039,6 @@ async def main():
             close_timeout=5,
             compression=None
         )
-        
         
         web_server = await websockets.serve(
             handle_web_client,
