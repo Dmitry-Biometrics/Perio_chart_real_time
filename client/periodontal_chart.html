@@ -281,6 +281,56 @@
             color: white !important;
             font-weight: bold;
         }
+		
+		.data-cell.high-cal {
+			background: linear-gradient(135deg, #fff3e0, #ffcc02) !important;
+			color: #e65100;
+			font-weight: bold;
+		}
+
+		.data-cell.critical-cal {
+			background: linear-gradient(135deg, #ffebee, #f44336) !important;
+			color: white;
+			font-weight: bold;
+		}
+
+		.instant-indicator {
+			position: absolute;
+			top: 20px;
+			right: 20px;
+			background: linear-gradient(135deg, #e74c3c, #c0392b);
+			color: white;
+			padding: 10px 20px;
+			border-radius: 25px;
+			font-weight: bold;
+			font-size: 0.9em;
+			opacity: 0;
+			transform: scale(0.8);
+			transition: all 0.3s ease;
+		}
+
+		.instant-indicator.active {
+			opacity: 1;
+			transform: scale(1);
+			background: linear-gradient(135deg, #27ae60, #2ecc71);
+			animation: instantPulse 0.5s ease;
+		}
+
+		@keyframes instantPulse {
+			0% { transform: scale(1); }
+			50% { transform: scale(1.1); box-shadow: 0 0 20px rgba(39, 174, 96, 0.6); }
+			100% { transform: scale(1); }
+		}
+
+		/* НОВОЕ: Стиль для частичных команд */
+		.partial-command-indicator {
+			background: linear-gradient(135deg, #f39c12, #e67e22);
+			border-left: 4px solid #f39c12;
+		}
+
+		.partial-command-indicator::before {
+			content: "⏳ ";
+		}
 
         @keyframes highlight {
             0% { 
@@ -430,9 +480,12 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🦷 Voice-Controlled Periodontal Chart - Clinical Tables</h1>
-            <p>Professional periodontal charting with voice recognition</p>
-        </div>
+			<h1>🦷 Voice-Controlled Periodontal Chart - Clinical Tables</h1>
+			<p>Professional periodontal charting with voice recognition</p>
+			<div id="instantIndicator" class="instant-indicator">
+				⚡ INSTANT EXECUTION
+			</div>
+		</div>
 
         <div class="voice-controls">
             <button id="voiceButton" class="voice-button">🎤 Start Voice Input</button>
@@ -470,6 +523,7 @@
                 <button class="test-button" onclick="testCommand('furcation class 2 on tooth 6')">Test Furcation</button>
                 <button class="test-button" onclick="testCommand('gingival margin on tooth 14 minus 1 0 plus 1')">Test GM</button>
                 <button class="test-button" onclick="testCommand('missing teeth 1 16 17 32')">Test Missing</button>
+				<button class="test-button" onclick="testCALCalculation()">🧮 Test CAL Auto-Calc</button>
             </div>
         </div>
 
@@ -502,6 +556,14 @@
                 <div class="stat-value" id="missingCount">0</div>
                 <div class="stat-label">Missing Teeth</div>
             </div>
+			<div class="stat-card">
+			<div class="stat-value" id="instantCommands">0</div>
+			<div class="stat-label">⚡ Instant Commands</div>
+			</div>
+			<div class="stat-card">
+			<div class="stat-value" id="partialCommands">0</div>
+			<div class="stat-label">⏳ Partial Commands</div>
+			</div>
         </div>
     </div>
 
@@ -521,10 +583,12 @@
                     commandsCount: 0,
                     teethUpdated: 0,
                     bleedingCount: 0,
-                    missingCount: 0
+                    missingCount: 0,
+					instantCommands: 0,  // НОВОЕ
+					partialCommands: 0   // НОВОЕ
                 };
                 
-                this.serverUri = "ws://3.84.215.173:8766";
+                this.serverUri = "ws://184.73.11.23:8766";
                 
                 this.initializeTeethData();
                 this.createClinicalTables();
@@ -777,6 +841,56 @@
                 }
             }
 
+			markSingleToothAsMissing(toothNumber) {
+				console.log(`❌ Marking single tooth ${toothNumber} as missing`);
+				
+				// Валидация
+				if (!toothNumber || !Number.isInteger(toothNumber) || toothNumber < 1 || toothNumber > 32) {
+					console.error(`❌ Invalid tooth number: ${toothNumber}`);
+					this.showFeedback(`❌ Invalid tooth number: ${toothNumber}`, 'error');
+					return;
+				}
+				
+				// Помечаем зуб как отсутствующий в данных
+				if (this.teethData[toothNumber]) {
+					this.teethData[toothNumber].missing = true;
+					console.log(`📝 Updated teethData for tooth ${toothNumber}`);
+				}
+				
+				// Находим все ячейки для этого зуба
+				const toothCells = document.querySelectorAll(`[id*="-${toothNumber}-"]`);
+				console.log(`🔍 Found ${toothCells.length} cells for tooth ${toothNumber}`);
+				
+				if (toothCells.length === 0) {
+					console.warn(`⚠️ No cells found for tooth ${toothNumber}`);
+					this.showFeedback(`⚠️ Could not find cells for tooth ${toothNumber}`, 'error');
+					return;
+				}
+				
+				// Помечаем все ячейки как отсутствующие
+				let markedCells = 0;
+				toothCells.forEach(cell => {
+					cell.textContent = 'X';
+					cell.innerHTML = 'X'; // На случай если textContent не работает
+					
+					// Убираем старые классы
+					cell.classList.remove('updated', 'bleeding', 'high-probing', 'critical-probing', 'high-cal', 'critical-cal');
+					
+					// Добавляем класс missing-tooth
+					cell.classList.add('missing-tooth');
+					
+					console.log(`✅ Marked cell ${cell.id} as missing`);
+					markedCells++;
+				});
+				
+				// Обновляем статистику
+				this.stats.missingCount++;
+				this.stats.teethUpdated++;
+				
+				console.log(`✅ Successfully marked tooth ${toothNumber} as missing (${markedCells} cells updated)`);
+				this.showFeedback(`✅ Tooth ${toothNumber} marked as missing`, 'success');
+			}
+
             handleServerMessage(data) {
                 try {
                     const message = JSON.parse(data);
@@ -804,6 +918,13 @@
                             console.log('🏓 Pong received');
                             this.showFeedback('Connection test successful', 'success');
                             break;
+							
+						case 'partial_command_feedback':
+							this.handlePartialCommand(message);
+							break;
+						case 'instant_execution':
+							this.handleInstantExecution(message);
+							break;	
                         case 'connection':
                             console.log('🔗 Connection info:', message);
                             this.showFeedback(`Connected to server with features: ${Object.keys(message.features || {}).join(', ')}`, 'success');
@@ -816,92 +937,253 @@
                     console.error('📄 Raw message:', data);
                 }
             }
+			handlePartialCommand(message) {
+				if (message.partial_text) {
+					this.stats.partialCommands++; // ДОБАВИТЬ эту строку
+				}
+				this.showFeedback(`⏳ Waiting for completion: "${message.partial_text}"`, 'partial-command-indicator');
+				this.showInstantIndicator(false); // Показать ожидание
+			}
 
-            handlePeriodontalUpdate(message) {
-                console.log('🦷 Handling periodontal update:', message);
-                
-                if (message.success && message.tooth_number) {
-                    const tooth = message.tooth_number;
-                    const measurementType = message.measurement_type;
-                    const surface = message.surface;
-                    const position = message.position;
-                    const values = message.values || [];
-                    const measurements = message.measurements || {};
-                    
-                    console.log(`📊 Processing: ${measurementType} for tooth ${tooth}`);
-                    console.log(`🔧 Surface: ${surface}, Position: ${position}`);
-                    console.log(`📈 Values:`, values);
-                    console.log(`📋 Measurements:`, measurements);
-                    
-                    // Обновляем ячейки на основе типа измерения
-                    this.updateCellsByMeasurementType(tooth, measurementType, surface, position, values, measurements);
-                    
-                    this.stats.teethUpdated++;
-                    this.updateStats();
-                    
-                    this.showFeedback(`✅ ${message.message}`, 'success');
-                } else {
-                    this.showFeedback(`❌ ${message.message || 'Periodontal update failed'}`, 'error');
-                }
-            }
+			handleInstantExecution(message) {
+				this.showInstantIndicator(true); // Показать мгновенное выполнение
+				this.showFeedback(`⚡ INSTANT: ${message.message}`, 'success');
+			}
 
-            updateCellsByMeasurementType(tooth, measurementType, surface, position, values, measurements) {
-                console.log(`🔧 Updating cells for tooth ${tooth}, type: ${measurementType}`);
-                
-                switch (measurementType) {
-                    case 'probing_depth':
-                        this.updateProbingDepthCells(tooth, surface, values);
-                        break;
-                    case 'bleeding':
-                    case 'bleeding_on_probing':
-                        this.updateBleedingCells(tooth, surface, position, values);
-                        break;
-                    case 'suppuration':
-                        this.updateSuppurationCells(tooth, surface, position, values);
-                        break;
-                    case 'mobility':
-                        this.updateMobilityCells(tooth, values);
-                        break;
-                    case 'furcation':
-                        this.updateFurcationCells(tooth, values);
-                        break;
-                    case 'gingival_margin':
-                        this.updateGingivalMarginCells(tooth, surface, values);
-                        break;
-                    case 'missing_teeth':
-                        this.markToothAsMissing(tooth);
-                        break;
-                    default:
-                        console.warn(`⚠️ Unknown measurement type: ${measurementType}`);
-                        // Fallback to legacy method
-                        this.updateCellsFromServer(tooth, measurements);
-                }
-            }
+			showInstantIndicator(isInstant) {
+				const indicator = document.getElementById('instantIndicator');
+				if (isInstant) {
+					indicator.textContent = '⚡ INSTANT EXECUTED';
+					indicator.classList.add('active');
+					setTimeout(() => {
+						indicator.classList.remove('active');
+					}, 2000);
+				} else {
+					indicator.textContent = '⏳ WAITING...';
+					indicator.classList.add('active');
+					indicator.style.background = 'linear-gradient(135deg, #f39c12, #e67e22)';
+				}
+			}
+			
+		handlePeriodontalUpdate(message) {
+			console.log('🦷 Handling periodontal update:', message);
+			
+			if (message.instant_execution) {
+				this.showInstantIndicator(true);
+				this.stats.instantCommands++;
+				this.showFeedback(`⚡ INSTANT: ${message.message}`, 'success');
+			}
+
+			if (message.success) {
+				const tooth = message.tooth_number;
+				const measurementType = message.measurement_type;
+				const surface = message.surface;
+				const position = message.position;
+				const values = message.values || [];
+				const measurements = message.measurements || {};
+				
+				console.log(`📊 Processing: ${measurementType} for tooth ${tooth}`);
+				console.log(`🔧 Surface: ${surface}, Position: ${position}`);
+				console.log(`📈 Values:`, values);
+				console.log(`📋 Measurements:`, measurements);
+				
+				// ✅ ПРОСТАЯ ОБРАБОТКА MISSING TEETH
+				if (measurementType === 'missing_teeth') {
+					console.log('🦷 MISSING TEETH DETECTED - Simple handling');
+					// ОДИН зуб - ПРОСТАЯ обработка
+					this.markSingleToothAsMissing(tooth);
+				} else {
+					// Обычная обработка для других типов измерений
+					this.updateCellsByMeasurementType(tooth, measurementType, surface, position, values, measurements);
+					this.stats.teethUpdated++;
+				}
+				
+				this.updateStats();
+				this.showFeedback(`✅ ${message.message}`, 'success');
+			} else {
+				this.showFeedback(`❌ ${message.message || 'Periodontal update failed'}`, 'error');
+			}
+		}
+
+			updateCellsByMeasurementType(tooth, measurementType, surface, position, values, measurements) {
+				console.log(`🔧 Updating cells for tooth ${tooth}, type: ${measurementType}`);
+				
+				switch (measurementType) {
+					case 'probing_depth':
+						this.updateProbingDepthCells(tooth, surface, values);
+						break;
+					case 'bleeding':
+					case 'bleeding_on_probing':
+						this.updateBleedingCells(tooth, surface, position, values);
+						break;
+					case 'suppuration':
+						this.updateSuppurationCells(tooth, surface, position, values);
+						break;
+					case 'mobility':
+						this.updateMobilityCells(tooth, values);
+						break;
+					case 'furcation':
+						this.updateFurcationCells(tooth, values);
+						break;
+					case 'gingival_margin':
+						this.updateGingivalMarginCells(tooth, surface, values);
+						break;
+					case 'missing_teeth':
+						// ⭐ ЕДИНСТВЕННАЯ правильная обработка missing_teeth
+						this.handleMissingTeethUpdate(measurements);
+						break;
+					default:
+						console.warn(`⚠️ Unknown measurement type: ${measurementType}`);
+						this.updateCellsFromServer(tooth, measurements);
+				}
+			}
+			
+		handleMissingTeethUpdate(message, measurements) {
+			console.log('🦷 ENHANCED Missing teeth handler:', message);
+			console.log('📊 Measurements object:', measurements);
+			
+			// Извлекаем номера зубов из ВСЕХ возможных источников
+			let toothNumbers = [];
+			
+			// 1. Проверяем tooth_number в сообщении
+			if (message.tooth_number && Number.isInteger(message.tooth_number) && message.tooth_number >= 1 && message.tooth_number <= 32) {
+				toothNumbers.push(message.tooth_number);
+				console.log(`✅ Found tooth from message.tooth_number: ${message.tooth_number}`);
+			}
+			
+			// 2. Проверяем values в сообщении
+			if (message.values && Array.isArray(message.values)) {
+				const validValues = message.values.filter(v => Number.isInteger(v) && v >= 1 && v <= 32);
+				toothNumbers = toothNumbers.concat(validValues);
+				console.log(`✅ Found teeth from message.values: ${validValues}`);
+			}
+			
+			// 3. Проверяем measurements объект
+			if (measurements) {
+				// Проверяем missing_teeth
+				if (measurements.missing_teeth && Array.isArray(measurements.missing_teeth)) {
+					const validTeeth = measurements.missing_teeth.filter(v => Number.isInteger(v) && v >= 1 && v <= 32);
+					toothNumbers = toothNumbers.concat(validTeeth);
+					console.log(`✅ Found teeth from measurements.missing_teeth: ${validTeeth}`);
+				}
+				
+				// Проверяем teeth
+				if (measurements.teeth && Array.isArray(measurements.teeth)) {
+					const validTeeth = measurements.teeth.filter(v => Number.isInteger(v) && v >= 1 && v <= 32);
+					toothNumbers = toothNumbers.concat(validTeeth);
+					console.log(`✅ Found teeth from measurements.teeth: ${validTeeth}`);
+				}
+				
+				// Проверяем values
+				if (measurements.values && Array.isArray(measurements.values)) {
+					const validTeeth = measurements.values.filter(v => Number.isInteger(v) && v >= 1 && v <= 32);
+					toothNumbers = toothNumbers.concat(validTeeth);
+					console.log(`✅ Found teeth from measurements.values: ${validTeeth}`);
+				}
+			}
+			
+			// 4. ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: парсим оригинальный текст как fallback
+			if (toothNumbers.length === 0 && message.original_text) {
+				const text = message.original_text.toLowerCase();
+				console.log(`🔍 Parsing original text for numbers: "${text}"`);
+				
+				// Словарь для числовых слов
+				const wordToNum = {
+					'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+					'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+					'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
+					'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18,
+					'nineteen': 19, 'twenty': 20, 'thirty': 30, 'thirty-one': 31, 'thirty-two': 32
+				};
+				
+				// Ищем числа в тексте
+				const words = text.split(/\s+/);
+				for (const word of words) {
+					const cleanWord = word.replace(/[^\w]/g, '');
+					
+					// Проверяем цифры
+					if (/^\d+$/.test(cleanWord)) {
+						const num = parseInt(cleanWord);
+						if (num >= 1 && num <= 32) {
+							toothNumbers.push(num);
+							console.log(`✅ Found tooth number from text: ${num}`);
+						}
+					}
+					// Проверяем числовые слова
+					else if (wordToNum[cleanWord]) {
+						const num = wordToNum[cleanWord];
+						if (num >= 1 && num <= 32) {
+							toothNumbers.push(num);
+							console.log(`✅ Found tooth from word "${cleanWord}": ${num}`);
+						}
+					}
+				}
+				
+				// Специальная обработка для "too" = "two" = зуб 2
+				if ((text.includes('too') || text.includes('two')) && text.includes('missing')) {
+					if (!toothNumbers.includes(2)) {
+						toothNumbers.push(2);
+						console.log(`✅ Found tooth 2 from 'too'/'two' in missing context`);
+					}
+				}
+			}
+			
+			// Убираем дубликаты и сортируем
+			toothNumbers = [...new Set(toothNumbers)].sort((a, b) => a - b);
+			
+			console.log(`🎯 FINAL tooth numbers to mark as missing: ${toothNumbers}`);
+			
+			if (toothNumbers.length > 0) {
+				// Отмечаем каждый зуб как отсутствующий
+				toothNumbers.forEach(tooth => {
+					this.markToothAsMissing(tooth);
+					console.log(`✅ Successfully marked tooth ${tooth} as missing`);
+				});
+				
+				// Обновляем статистику
+				this.stats.missingCount += toothNumbers.length;
+				this.stats.teethUpdated += toothNumbers.length;
+				
+				// Показываем сообщение об успехе
+				const message_text = `✅ Marked ${toothNumbers.length} teeth as missing: ${toothNumbers.join(', ')}`;
+				this.showFeedback(message_text, 'success');
+				
+				// Обновляем статистику на экране
+				this.updateStats();
+				
+				console.log(`🎉 SUCCESS: Missing teeth operation completed for teeth: ${toothNumbers.join(', ')}`);
+				
+			} else {
+				console.error('❌ No valid tooth numbers found for missing teeth command');
+				this.showFeedback('❌ Could not identify tooth numbers from missing teeth command', 'error');
+			}
+		}
             
             updateProbingDepthCells(tooth, surface, values) {
-                if (!values || values.length !== 3) return;
-                
-                const surfaceType = surface || 'buccal';
-                console.log(`📏 Updating probing depth for tooth ${tooth} ${surfaceType}:`, values);
-                
-                values.forEach((depth, index) => {
-                    const element = document.getElementById(`PD-${tooth}-${surfaceType}-${index}`);
-                    if (element) {
-                        this.updateCell(element, depth);
-                        console.log(`✅ Updated PD-${tooth}-${surfaceType}-${index} = ${depth}`);
-                        
-                        // Apply styling based on depth
-                        if (depth >= 5) {
-                            element.classList.add('critical-probing');
-                        } else if (depth >= 4) {
-                            element.classList.add('high-probing');
-                        }
-                    } else {
-                        console.warn(`⚠️ Element not found: PD-${tooth}-${surfaceType}-${index}`);
-                    }
-                });
-            }
-            
+				if (!values || values.length !== 3) return;
+				
+				const surfaceType = surface || 'buccal';
+				console.log(`📏 Updating probing depth for tooth ${tooth} ${surfaceType}:`, values);
+				
+				values.forEach((depth, index) => {
+					const element = document.getElementById(`PD-${tooth}-${surfaceType}-${index}`);
+					if (element) {
+						this.updateCell(element, depth);
+						console.log(`✅ Updated PD-${tooth}-${surfaceType}-${index} = ${depth}`);
+						
+						// Apply styling based on depth
+						element.classList.remove('high-probing', 'critical-probing');
+						if (depth >= 5) {
+							element.classList.add('critical-probing');
+						} else if (depth >= 4) {
+							element.classList.add('high-probing');
+						}
+					} else {
+						console.warn(`⚠️ Element not found: PD-${tooth}-${surfaceType}-${index}`);
+					}
+				});
+			}
+					
             updateBleedingCells(tooth, surface, position, values) {
                 const surfaceType = surface || 'buccal';
                 const positionIndex = this.getPositionIndex(position || 'distal');
@@ -980,17 +1262,29 @@
                 });
             }
             
-            markToothAsMissing(tooth) {
-                console.log(`❌ Marking tooth ${tooth} as missing`);
-                
-                const toothCells = document.querySelectorAll(`[id*="-${tooth}-"]`);
-                toothCells.forEach(cell => {
-                    this.updateCell(cell, 'X');
-                    cell.classList.add('missing-tooth');
-                });
-                
-                this.stats.missingCount++;
-            }
+			markToothAsMissing(tooth) {
+				console.log(`❌ Marking tooth ${tooth} as missing`);
+				
+				// Помечаем зуб как отсутствующий в данных
+				if (this.teethData[tooth]) {
+					this.teethData[tooth].missing = true;
+				}
+				// Находим все ячейки для этого зуба и помечаем как отсутствующие
+				const toothCells = document.querySelectorAll(`[id*="-${tooth}-"]`);
+				console.log(`🔍 Found ${toothCells.length} cells for tooth ${tooth}`);
+				
+				toothCells.forEach(cell => {
+					cell.textContent = 'X';
+					cell.classList.remove('updated', 'bleeding', 'high-probing', 'critical-probing', 'high-cal', 'critical-cal');
+					cell.classList.add('missing-tooth');
+					console.log(`✅ Marked cell ${cell.id} as missing`);
+				});
+				
+				// Обновляем статистику
+				this.updateStats();
+				
+				console.log(`✅ Successfully marked tooth ${tooth} as missing`);
+			}
 
             updateCellsFromServer(tooth, measurements) {
                 if (measurements.probing_depth && Array.isArray(measurements.probing_depth)) {
@@ -1037,7 +1331,18 @@
                     this.showFeedback('Command not recognized. Try the new command format.', 'error');
                 }
             }
-
+			recalculateAllCAL() {
+				for (let tooth = 1; tooth <= 32; tooth++) {
+					['buccal', 'lingual'].forEach(surfaceType => {
+						[0, 1, 2].forEach(surfaceIndex => {
+							const pdElement = document.getElementById(`PD-${tooth}-${surfaceType}-${surfaceIndex}`);
+							if (pdElement && pdElement.textContent.trim() && !isNaN(pdElement.textContent.trim())) {
+								this.calculateCAL(pdElement);
+							}
+						});
+					});
+				}
+			}
             parsePeriodontalCommand(text) {
                 // 1. Probing depth commands
                 let match = text.match(/probing depth on tooth number (\d+) (buccal|lingual) surface (\d+) (\d+) (\d+)/i);
@@ -1215,14 +1520,71 @@
                 return positionMap[position?.toLowerCase()] || 0;
             }
 
-            updateCell(element, value) {
-                element.textContent = value;
-                element.classList.add('updated');
-                
-                setTimeout(() => {
-                    element.classList.remove('updated');
-                }, 3000);
-            }
+			updateCell(element, value) {
+				element.textContent = value;
+				element.classList.add('updated');
+				
+				// Auto-calculate CAL when PD or GM is updated
+				if (element.id.includes('PD-') || element.id.includes('GM-')) {
+					this.calculateCAL(element);
+				}
+				
+				setTimeout(() => {
+					element.classList.remove('updated');
+				}, 3000);
+			}
+			
+			calculateCAL(changedElement) {
+				// Extract tooth number, surface type, and surface index from element ID
+				const idParts = changedElement.id.split('-');
+				if (idParts.length < 4) return;
+				
+				const measurementType = idParts[0]; // PD or GM
+				const tooth = idParts[1];
+				const surfaceType = idParts[2]; // buccal or lingual
+				const surfaceIndex = idParts[3]; // 0, 1, or 2
+				
+				// Get corresponding PD and GM elements
+				const pdElement = document.getElementById(`PD-${tooth}-${surfaceType}-${surfaceIndex}`);
+				const gmElement = document.getElementById(`GM-${tooth}-${surfaceType}-${surfaceIndex}`);
+				const calElement = document.getElementById(`CAL-${tooth}-${surfaceType}-${surfaceIndex}`);
+				
+				if (!pdElement || !gmElement || !calElement) return;
+				
+				// Get values from PD and GM cells
+				const pdValue = pdElement.textContent.trim();
+				const gmValue = gmElement.textContent.trim();
+				
+				// Only calculate if both PD and GM have numeric values
+				if (pdValue && gmValue && !isNaN(pdValue) && !isNaN(gmValue)) {
+					const pd = parseFloat(pdValue);
+					const gm = parseFloat(gmValue);
+					const cal = pd + gm;
+					
+					// Update CAL cell
+					calElement.textContent = cal.toString();
+					calElement.classList.add('updated');
+					
+					// Apply styling based on CAL value
+					calElement.classList.remove('high-cal', 'critical-cal');
+					if (cal >= 7) {
+						calElement.classList.add('critical-cal');
+					} else if (cal >= 5) {
+						calElement.classList.add('high-cal');
+					}
+					
+					setTimeout(() => {
+						calElement.classList.remove('updated');
+					}, 3000);
+					
+					console.log(`📊 CAL calculated for tooth ${tooth} ${surfaceType}-${surfaceIndex}: PD(${pd}) + GM(${gm}) = CAL(${cal})`);
+				} else if (!pdValue || !gmValue || pdValue === '&nbsp;' || gmValue === '&nbsp;') {
+					// Clear CAL if either PD or GM is empty
+					calElement.textContent = '';
+					calElement.innerHTML = '&nbsp;';
+					calElement.classList.remove('high-cal', 'critical-cal');
+				}
+			}
 
             startRecording() {
                 if (!this.isConnected) {
@@ -1268,6 +1630,7 @@
                     this.showFeedback('All data cleared', 'success');
                 }
             }
+			
 
             debugConnection() {
                 console.log('🔍 === CONNECTION DEBUG INFO ===');
@@ -1296,7 +1659,14 @@
             updateStats() {
                 document.getElementById('commandsCount').textContent = this.stats.commandsCount;
                 document.getElementById('teethUpdated').textContent = this.stats.teethUpdated;
-                document.getElementById('missingCount').textContent = this.stats.missingCount;
+                let missingCount = 0;
+				Object.values(this.teethData).forEach(tooth => {
+					if (tooth.missing) {
+						missingCount++;
+					}
+				});
+				this.stats.missingCount = missingCount;
+				document.getElementById('missingCount').textContent = missingCount;
                 
                 let bleedingCount = 0;
                 Object.values(this.teethData).forEach(tooth => {
@@ -1325,6 +1695,8 @@
                 
                 const avgProbing = measurementCount > 0 ? (totalDepth / measurementCount).toFixed(1) + 'mm' : '-';
                 document.getElementById('avgProbing').textContent = avgProbing;
+				document.getElementById('instantCommands').textContent = this.stats.instantCommands || 0;
+				document.getElementById('partialCommands').textContent = this.stats.partialCommands || 0;
             }
 
             updateConnectionStatus(text, connected) {
@@ -1361,6 +1733,24 @@
                 }
             }
         }
+
+
+		
+
+		function testCALCalculation() {
+			if (window.clinicalChart) {
+				window.clinicalChart.showFeedback('Testing CAL auto-calculation...', 'processing');
+				
+				// Test PD values for tooth 14
+				window.clinicalChart.processVoiceCommand('probing depth on tooth number 14 buccal surface 3 2 4');
+				
+				// Wait a bit then add GM values
+				setTimeout(() => {
+					window.clinicalChart.processVoiceCommand('gingival margin on tooth 14 minus 1 0 plus 1');
+					window.clinicalChart.showFeedback('CAL should now be calculated automatically: PD + GM = CAL', 'success');
+				}, 500);
+			}
+		}
 
         function testCommand(command) {
             if (window.clinicalChart) {

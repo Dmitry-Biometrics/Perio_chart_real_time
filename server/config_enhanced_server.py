@@ -18,16 +18,21 @@ WEB_PORT = 8766
 # Настройки аудио
 SAMPLE_RATE = 16000
 CLIENT_CHUNK_DURATION = 0.25  # Длительность чанка в секундах
-VAD_THRESHOLD = 0.4  # Порог VAD для детекции речи
+VAD_THRESHOLD = 0.25  # Порог VAD для детекции речи
 
 # Пороги молчания (в чанках)
-SILENCE_THRESHOLD_SHORT = 6   # Для коротких фраз
-SILENCE_THRESHOLD_MEDIUM = 8  # Для средних фраз
-SILENCE_THRESHOLD_LONG = 10   # Для длинных фраз
+SILENCE_THRESHOLD_SHORT = 2   # Для коротких фраз
+SILENCE_THRESHOLD_MEDIUM = 3  # Для средних фраз
+SILENCE_THRESHOLD_LONG = 4   # Для длинных фраз
 
 # Ограничения длительности речи
 MIN_SPEECH_DURATION = 0.5   # Минимальная длительность речи (сек)
-MAX_SPEECH_DURATION = 25.0  # Максимальная длительность речи (сек)
+MAX_SPEECH_DURATION = 15.0  # Максимальная длительность речи (сек)
+
+ULTRA_FAST_MODE = True
+TARGET_RESPONSE_TIME_MS = 50
+PREDICTIVE_PROCESSING = True
+STREAMING_ANALYSIS = True
 
 # =============================================================================
 # НАСТРОЙКИ ЗАПИСИ АУДИО

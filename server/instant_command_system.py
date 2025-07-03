@@ -12,6 +12,20 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 import time
+import numpy as np
+
+# ДОБАВЬТЕ этот импорт если используется SpeechState из сегментации:
+try:
+    from fixed_segmentation_no_duplication import SpeechState
+    SEGMENTATION_AVAILABLE = True
+except ImportError:
+    # Если модуль сегментации недоступен, создаем минимальную заглушку
+    class SpeechState(Enum):
+        SILENCE = "silence"
+        SPEECH_DETECTION = "speech_detection" 
+        SPEECH_ACTIVE = "speech_active"
+        SPEECH_ENDING = "speech_ending"
+    SEGMENTATION_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +58,7 @@ class InstantCommandAnalyzer:
         return [
             # 1. PROBING DEPTH - требует 3 числа после surface
             CommandPattern(
-                pattern=r'probing\s+depth\s+on\s+tooth\s+(?:number\s+)?(\d+)\s+(buccal|lingual)\s+surface(?:\s+(\d+)(?:\s+(\d+)(?:\s+(\d+))?)?)?',
+                pattern=r'probing\s+depth\s+on\s+tooth\s+(?:number\s+)?(\w+)[,]?\s+(buccal|lingual)\s+surface\s+(\w+)[,]?\s+(\w+)[,]?\s+(\w+)[.]?',
                 required_groups=['tooth', 'surface', 'depth1', 'depth2', 'depth3'],
                 completion_rules={
                     'min_required_groups': 5,  # Все 5 групп обязательны
@@ -62,7 +76,7 @@ class InstantCommandAnalyzer:
             
             # 2. MOBILITY - требует grade + число
             CommandPattern(
-                pattern=r'tooth\s+(\d+)\s+has\s+mobility(?:\s+grade\s+(\d+))?',
+                pattern=r'tooth\s+(\w+)\s+has\s+mobility(?:\s+grade\s+(\w+))?',
                 required_groups=['tooth', 'grade'],
                 completion_rules={
                     'min_required_groups': 2,
@@ -77,7 +91,7 @@ class InstantCommandAnalyzer:
             
             # 3. BLEEDING ON PROBING - требует tooth + surface + position
             CommandPattern(
-                pattern=r'bleeding\s+on\s+probing\s+tooth\s+(\d+)(?:\s+(buccal|lingual)(?:\s+(distal|mesial|mid|middle))?)?',
+                pattern=r'bleeding\s+on\s+probing\s+tooth\s+(\w+)\s+(buccal|lingual)\s+(distal|mesial|mid|middle)',
                 required_groups=['tooth', 'surface', 'position'],
                 completion_rules={
                     'min_required_groups': 3,
@@ -93,7 +107,7 @@ class InstantCommandAnalyzer:
             
             # 4. SUPPURATION - требует tooth + surface + position
             CommandPattern(
-                pattern=r'suppuration\s+present\s+on\s+tooth\s+(\d+)(?:\s+(buccal|lingual)(?:\s+(distal|mesial|mid|middle))?)?',
+                pattern=r'suppuration\s+present\s+on\s+tooth\s+(\w+)\s+(buccal|lingual)\s+(distal|mesial|mid|middle)',
                 required_groups=['tooth', 'surface', 'position'],
                 completion_rules={
                     'min_required_groups': 3,
@@ -109,7 +123,7 @@ class InstantCommandAnalyzer:
             
             # 5. FURCATION - требует class + tooth
             CommandPattern(
-                pattern=r'furcation\s+class\s+(\d+)\s+on\s+tooth\s+(\d+)',
+                pattern=r'furcation\s+class\s+(\w+)\s+on\s+tooth\s+(\w+)',
                 required_groups=['class', 'tooth'],
                 completion_rules={
                     'min_required_groups': 2,
@@ -136,19 +150,60 @@ class InstantCommandAnalyzer:
                 command_type='gingival_margin',
                 priority=1
             ),
-            
-            # 7. MISSING TEETH - требует teeth (список чисел)
+  
+            # 7. MISSING TEETH - УЛУЧШЕННЫЙ паттерн для распознавания слов-чисел
             CommandPattern(
-                pattern=r'missing\s+teeth?\s+([\d\s]+)',
+                pattern=r'missing\s+teeth?\s+((?:\w+[\s,]*)+)',  # Более гибкий паттерн
                 required_groups=['teeth'],
                 completion_rules={
                     'min_required_groups': 1,
-                    'custom_validation': 'missing_teeth_list',
+                    'custom_validation': 'missing_teeth_list_enhanced',
                 },
                 command_type='missing_teeth',
                 priority=1
             ),
         ]
+
+    def _validate_missing_teeth_list_enhanced(self, teeth_text: str) -> bool:
+        """УЛУЧШЕННАЯ валидация списка отсутствующих зубов с поддержкой слов"""
+        if not teeth_text:
+            return False
+        
+        # Словарь для конвертации слов в числа
+        word_to_num = {
+            'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+            'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
+            'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18,
+            'nineteen': 19, 'twenty': 20, 'twenty-one': 21, 'twenty-two': 22,
+            'twenty-three': 23, 'twenty-four': 24, 'twenty-five': 25,
+            'twenty-six': 26, 'twenty-seven': 27, 'twenty-eight': 28,
+            'twenty-nine': 29, 'thirty': 30, 'thirty-one': 31, 'thirty-two': 32
+        }
+        
+        try:
+            teeth = []
+            words = teeth_text.lower().strip().split()
+            
+            for word in words:
+                clean_word = word.strip('.,!?;:')
+                
+                # Проверяем цифры
+                if clean_word.isdigit():
+                    tooth_num = int(clean_word)
+                    if 1 <= tooth_num <= 32:
+                        teeth.append(tooth_num)
+                # Проверяем словесные числа
+                elif clean_word in word_to_num:
+                    tooth_num = word_to_num[clean_word]
+                    if 1 <= tooth_num <= 32:
+                        teeth.append(tooth_num)
+            
+            return len(teeth) > 0
+            
+        except Exception as e:
+            print(f"❌ Missing teeth validation error: {e}")
+            return False
     
     def analyze_command_completeness(self, text: str, client_id: str) -> Tuple[CommandCompleteness, Optional[Dict]]:
         """
@@ -157,6 +212,18 @@ class InstantCommandAnalyzer:
         text_clean = text.lower().strip()
         
         print(f"🔍 ANALYZING COMMAND COMPLETENESS: '{text_clean}'")
+        
+        # ДОБАВИТЬ: Проверка на частичные команды СНАЧАЛА
+        partial_patterns = [
+            r'probing\s+depth\s+.*?tooth\s+(?:number\s+)?(\d+)\s+.*(buccal|lingual)(?:\s+surface)?$',
+            r'tooth\s+(\d+).*?mobility(?:\s+grade)?$',
+            r'bleeding\s+on\s+probing\s+tooth\s+(\d+)(?:\s+(buccal|lingual))?$'
+        ]
+        
+        for pattern in partial_patterns:
+            if re.search(pattern, text_clean):
+                print(f"⏳ PARTIAL COMMAND DETECTED")
+                return CommandCompleteness.INCOMPLETE, None
         
         # Проверяем каждый паттерн
         for pattern_obj in self.command_patterns:
@@ -220,34 +287,86 @@ class InstantCommandAnalyzer:
         return CommandCompleteness.COMPLETE, command_data
     
     def _validate_command_values(self, pattern_obj: CommandPattern, groups, text: str) -> bool:
-        """Валидация значений команды"""
-        
+        """Валидация значений команды с поддержкой слов-чисел"""
+   
+        # ✅ ТОТЖЕ ИСПРАВЛЕННЫЙ словарь
+        word_to_num = {
+            'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+            'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
+            'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18,
+            'nineteen': 19, 'twenty': 20, 'twenty-one': 21, 'twenty-two': 22,
+            'twenty-three': 23, 'twenty-four': 24, 'twenty-five': 25,
+            'twenty-six': 26, 'twenty-seven': 27, 'twenty-eight': 28,
+            'twenty-nine': 29, 'thirty': 30, 'thirty-one': 31, 'thirty-two': 32,
+            
+            # ✅ КРИТИЧЕСКОЕ ДОБАВЛЕНИЕ: ASR ошибки
+            'too': 2, 'to': 2, 'for': 4, 'ate': 8, 'won': 1, 'tree': 3, 'sex': 6, 'free': 3
+        }
+
+        # ✅ ИСПРАВЛЕННАЯ функция безопасной конвертации
+        def safe_convert_to_int(value):
+            """Безопасно конвертирует строку или слово в число"""
+            if not value:
+                return None
+            
+            value_clean = str(value).strip().lower()
+            
+            # Убираем знаки препинания
+            value_clean = value_clean.rstrip('.,!?;:')
+            
+            # Сначала проверяем цифры
+            if value_clean.isdigit():
+                return int(value_clean)
+            
+            # Затем проверяем слова-числа (включая ASR ошибки)
+            if value_clean in word_to_num:
+                return word_to_num[value_clean]
+            
+            # Если не удалось конвертировать
+            print(f"⚠️ Warning: Could not convert '{value}' to number")
+            return None
+       
         completion_rules = pattern_obj.completion_rules
-        
-        # Стандартная валидация
+       
+        # Стандартная валидация с конвертацией
         if 'validation' in completion_rules:
             validation_rules = completion_rules['validation']
             required_groups = pattern_obj.required_groups
-            
+           
             for i, group_name in enumerate(required_groups):
                 if i < len(groups) and groups[i] is not None:
-                    value = groups[i].strip()
+                    original_value = groups[i].strip()
+                   
+                    # ✅ ИСПРАВЛЕНИЕ: Конвертируем перед валидацией
+                    if group_name in ['tooth', 'depth1', 'depth2', 'depth3', 'grade', 'class']:
+                        converted_value = safe_convert_to_int(original_value)
+                        if converted_value is None:
+                            print(f"❌ Failed to convert '{original_value}' to number for {group_name}")
+                            return False
+                        # Используем конвертированное значение для валидации
+                        validation_value = converted_value
+                    else:
+                        validation_value = original_value
+                   
                     if group_name in validation_rules:
                         try:
-                            if not validation_rules[group_name](value):
+                            if not validation_rules[group_name](validation_value):
+                                print(f"❌ Validation failed for {group_name}: {validation_value}")
                                 return False
-                        except:
+                        except Exception as e:
+                            print(f"❌ Validation error for {group_name}: {e}")
                             return False
-        
+       
         # Кастомная валидация
         if 'custom_validation' in completion_rules:
             custom_type = completion_rules['custom_validation']
-            
+           
             if custom_type == 'gingival_margin_values':
                 return self._validate_gingival_margin_values(groups[1] if len(groups) > 1 else None)
             elif custom_type == 'missing_teeth_list':
                 return self._validate_missing_teeth_list(groups[0] if len(groups) > 0 else None)
-        
+       
         return True
     
     def _validate_gingival_margin_values(self, values_text: str) -> bool:
@@ -299,7 +418,53 @@ class InstantCommandAnalyzer:
             return False
     
     def _extract_command_data(self, pattern_obj: CommandPattern, groups, text: str) -> Dict:
-        """Извлечение данных команды"""
+        """Извлечение данных команды с поддержкой слов-чисел"""
+        
+        word_to_num = {
+            'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+            'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
+            'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18,
+            'nineteen': 19, 'twenty': 20, 'twenty-one': 21, 'twenty-two': 22,
+            'twenty-three': 23, 'twenty-four': 24, 'twenty-five': 25,
+            'twenty-six': 26, 'twenty-seven': 27, 'twenty-eight': 28,
+            'twenty-nine': 29, 'thirty': 30, 'thirty-one': 31, 'thirty-two': 32,
+            
+            # ✅ КРИТИЧЕСКОЕ ДОБАВЛЕНИЕ: ASR ошибки
+            'too': 2,    # "too" часто распознается вместо "two"
+            'to': 2,     # "to" тоже может быть "two"
+            'for': 4,    # "for" часто распознается вместо "four"
+            'ate': 8,    # "ate" может быть "eight"
+            'won': 1,    # "won" может быть "one"
+            'tree': 3,   # "tree" может быть "three"
+            'sex': 6,    # "sex" может быть "six"
+            'free': 3,   # "free" может быть "three"
+        }
+        
+        # ✅ ИСПРАВЛЕННАЯ функция безопасной конвертации
+        def safe_convert_to_int(value):
+            """Безопасно конвертирует строку или слово в число"""
+            if not value:
+                return 0
+            
+            value_clean = str(value).strip().lower()
+            
+            # Убираем знаки препинания
+            value_clean = value_clean.rstrip('.,!?;:')
+            
+            # Сначала проверяем цифры
+            if value_clean.isdigit():
+                return int(value_clean)
+            
+            # Затем проверяем слова-числа (включая ASR ошибки)
+            if value_clean in word_to_num:
+                converted = word_to_num[value_clean]
+                print(f"✅ Converted '{value}' → {converted}")
+                return converted
+            
+            # Если не удалось конвертировать
+            print(f"⚠️ Warning: Could not convert '{value}' to number, using 0")
+            return 0
         
         command_data = {
             'type': pattern_obj.command_type,
@@ -308,49 +473,97 @@ class InstantCommandAnalyzer:
         }
         
         if pattern_obj.command_type == 'probing_depth':
+            # ✅ ИСПРАВЛЕНИЕ: Используем безопасную конвертацию
+            tooth_num = safe_convert_to_int(groups[0]) if len(groups) > 0 else 0
+            surface = groups[1].lower() if len(groups) > 1 else 'buccal'
+            depth1 = safe_convert_to_int(groups[2]) if len(groups) > 2 else 0
+            depth2 = safe_convert_to_int(groups[3]) if len(groups) > 3 else 0
+            depth3 = safe_convert_to_int(groups[4]) if len(groups) > 4 else 0
+            
             command_data.update({
-                'tooth': int(groups[0]),
-                'surface': groups[1].lower(),
-                'values': [int(groups[2]), int(groups[3]), int(groups[4])]
+                'tooth': tooth_num,
+                'surface': surface,
+                'values': [depth1, depth2, depth3]
             })
+            
+            print(f"✅ Probing depth extracted: tooth={tooth_num}, surface={surface}, values=[{depth1}, {depth2}, {depth3}]")
             
         elif pattern_obj.command_type == 'mobility':
+            # ✅ ИСПРАВЛЕНИЕ: То же самое для mobility
+            tooth_num = safe_convert_to_int(groups[0]) if len(groups) > 0 else 0
+            grade = safe_convert_to_int(groups[1]) if len(groups) > 1 else 0
+            
             command_data.update({
-                'tooth': int(groups[0]),
-                'grade': int(groups[1])
+                'tooth': tooth_num,
+                'grade': grade
             })
+            
+            print(f"✅ Mobility extracted: tooth={tooth_num}, grade={grade}")
             
         elif pattern_obj.command_type == 'bleeding_on_probing':
+            # ✅ ИСПРАВЛЕНИЕ: Для bleeding
+            tooth_num = safe_convert_to_int(groups[0]) if len(groups) > 0 else 0
+            surface = groups[1].lower() if len(groups) > 1 else 'buccal'
+            position = groups[2].lower() if len(groups) > 2 else 'distal'
+            
             command_data.update({
-                'tooth': int(groups[0]),
-                'surface': groups[1].lower(),
-                'position': groups[2].lower()
+                'tooth': tooth_num,
+                'surface': surface,
+                'position': position
             })
             
+            print(f"✅ Bleeding extracted: tooth={tooth_num}, surface={surface}, position={position}")
+            
         elif pattern_obj.command_type == 'suppuration':
+            # ✅ ИСПРАВЛЕНИЕ: Для suppuration
+            tooth_num = safe_convert_to_int(groups[0]) if len(groups) > 0 else 0
+            surface = groups[1].lower() if len(groups) > 1 else 'buccal'
+            position = groups[2].lower() if len(groups) > 2 else 'distal'
+            
             command_data.update({
-                'tooth': int(groups[0]),
-                'surface': groups[1].lower(),
-                'position': groups[2].lower()
+                'tooth': tooth_num,
+                'surface': surface,
+                'position': position
             })
             
         elif pattern_obj.command_type == 'furcation':
+            # ✅ ИСПРАВЛЕНИЕ: Для furcation
+            furcation_class = safe_convert_to_int(groups[0]) if len(groups) > 0 else 0
+            tooth_num = safe_convert_to_int(groups[1]) if len(groups) > 1 else 0
+            
             command_data.update({
-                'class': int(groups[0]),
-                'tooth': int(groups[1])
+                'class': furcation_class,
+                'tooth': tooth_num
             })
             
         elif pattern_obj.command_type == 'gingival_margin':
+            # ✅ ИСПРАВЛЕНИЕ: Для gingival margin (особый случай со знаками)
+            tooth_num = safe_convert_to_int(groups[0]) if len(groups) > 0 else 0
+            values = self._parse_gingival_margin_values(groups[1]) if len(groups) > 1 and groups[1] else []
+            
             command_data.update({
-                'tooth': int(groups[0]),
-                'values': self._parse_gingival_margin_values(groups[1]) if groups[1] else []
+                'tooth': tooth_num,
+                'values': values
             })
             
         elif pattern_obj.command_type == 'missing_teeth':
-            teeth = [int(x.strip()) for x in groups[0].split() if x.strip().isdigit()]
-            command_data.update({
-                'teeth': teeth
-            })
+            # ✅ ИСПРАВЛЕНИЕ: Для missing teeth
+            if len(groups) > 0 and groups[0]:
+                # Парсим список зубов
+                teeth_text = groups[0]
+                teeth = []
+                for word in teeth_text.split():
+                    tooth_num = safe_convert_to_int(word)
+                    if tooth_num is not None and 1 <= tooth_num <= 32: 
+                        teeth.append(tooth_num)
+                
+                command_data.update({
+                    'teeth': teeth
+                })
+            else:
+                command_data.update({
+                    'teeth': []
+                })
         
         return command_data
 

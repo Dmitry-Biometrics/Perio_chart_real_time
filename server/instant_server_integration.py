@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-ИНТЕГРАЦИЯ СИСТЕМЫ МГНОВЕННОГО ВЫПОЛНЕНИЯ КОМАНД
-Модификация процессора для поддержки мгновенного отклика
+ИСПРАВЛЕННАЯ ИНТЕГРАЦИЯ СИСТЕМЫ МГНОВЕННОГО ВЫПОЛНЕНИЯ КОМАНД
+Исправлены проблемы доступа к атрибутам базового процессора
 """
 
 import asyncio
@@ -9,6 +9,7 @@ import time
 import logging
 from typing import Optional
 import json
+import numpy as np
 
 # Импорт системы мгновенного выполнения
 from instant_command_system import (
@@ -20,7 +21,7 @@ from instant_command_system import (
 logger = logging.getLogger(__name__)
 
 class EnhancedProcessorWithInstantCommands:
-    """Расширенный процессор с поддержкой мгновенного выполнения"""
+    """ИСПРАВЛЕННЫЙ расширенный процессор с поддержкой мгновенного выполнения"""
     
     def __init__(self, base_processor, web_clients_ref):
         self.base_processor = base_processor
@@ -39,69 +40,138 @@ class EnhancedProcessorWithInstantCommands:
         
         logger.info("🚀 Enhanced processor with instant commands initialized")
     
+    # ИСПРАВЛЕНИЕ: Добавляем прокси-свойства для доступа к атрибутам базового процессора
+    @property
+    def asr(self):
+        """Прокси-доступ к ASR"""
+        return self.base_processor.asr
+    
+    @property
+    def vad(self):
+        """Прокси-доступ к VAD"""
+        return self.base_processor.vad
+    
+    @property
+    def segmentation_processor(self):
+        """Прокси-доступ к segmentation_processor"""
+        return getattr(self.base_processor, 'segmentation_processor', None)
+    
+    @property
+    def stats(self):
+        """Прокси-доступ к статистике с добавлением instant stats"""
+        base_stats = getattr(self.base_processor, 'stats', {})
+        # Объединяем статистику
+        combined_stats = base_stats.copy()
+        combined_stats.update(self.instant_stats)
+        combined_stats['instant_system_enabled'] = True
+        return combined_stats
+    
     def process_audio_chunk(self, client_id: str, audio_chunk) -> Optional[str]:
         """
-        МОДИФИЦИРОВАННАЯ обработка чанков с мгновенным выполнением
+        ИСПРАВЛЕННАЯ обработка чанков с мгновенным выполнением
         """
         # Обычная обработка через базовый процессор
         transcription_result = self.base_processor.process_audio_chunk(client_id, audio_chunk)
         
         if transcription_result and isinstance(transcription_result, str) and transcription_result.strip():
-            # Проверяем возможность мгновенного выполнения
-            asyncio.create_task(self._check_instant_execution(client_id, transcription_result))
+            # ✅ МГНОВЕННАЯ ПРОВЕРКА И ВЫПОЛНЕНИЕ
+            try:
+                print(f"🔍 INSTANT CHECK: '{transcription_result}'")
+                
+                # Синхронная проверка завершенности команды
+                completeness, command_data = self.instant_processor.analyzer.analyze_command_completeness(
+                    transcription_result, client_id
+                )
+                
+                if completeness == CommandCompleteness.COMPLETE:
+                    print(f"🚀 INSTANT EXECUTION NOW: '{transcription_result}'")
+                    
+                    # КРИТИЧНО: Блокируем дальнейшую обработку
+                    self._mark_command_as_processed_sync(client_id, transcription_result)
+                    
+                    # МГНОВЕННАЯ отправка результата (синхронно)
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Создаем задачу для мгновенной отправки
+                        task = loop.create_task(
+                            self.instant_processor._send_instant_result(client_id, command_data)
+                        )
+                        
+                        # Обновляем статистику мгновенно
+                        self.instant_stats['instant_commands_executed'] += 1
+                        
+
+                        
+                        print(f"⚡ INSTANT RESULT SENT in {time.time():.3f}s")
+                        
+                        # Возвращаем результат но помечаем как обработанный
+                        return transcription_result
+                        
+                elif completeness == CommandCompleteness.INCOMPLETE:
+                    print(f"⏳ WAITING FOR COMPLETION: '{transcription_result}'")
+                    # Отправляем промежуточную обратную связь
+                    if hasattr(self, '_send_partial_feedback_sync'):
+                        self._send_partial_feedback_sync(client_id, transcription_result)
+                    
+            except Exception as e:
+                print(f"❌ INSTANT CHECK ERROR: {e}")
+                import traceback
+                traceback.print_exc()
         
         return transcription_result
     
-    async def _check_instant_execution(self, client_id: str, text: str):
-        """Проверка и выполнение мгновенной команды"""
-        start_time = time.time()
+    def process_audio_chunk_with_predictive(self, client_id: str, audio_chunk: np.ndarray) -> Optional[str]:
+        """PREDICTIVE обработка - проверяем instant commands НА КАЖДОМ ЧАНКЕ"""
         
-        try:
-            # Анализируем завершенность команды
-            completeness, command_data = self.instant_processor.analyzer.analyze_command_completeness(text, client_id)
+        # Обычная обработка
+        result = self.base_processor.process_audio_chunk(client_id, audio_chunk)
+        
+        
+        # НОВОЕ: Predictive check на частичной транскрипции
+        if hasattr(self.base_processor, 'segmentation_processor'):
+            segmentation_processor = self.base_processor.segmentation_processor
             
-            if completeness == CommandCompleteness.COMPLETE:
-                # МГНОВЕННОЕ ВЫПОЛНЕНИЕ
-                print(f"🚀 INSTANT EXECUTION triggered for: '{text}'")
+            if hasattr(segmentation_processor, 'client_buffers'):
+                buffer = segmentation_processor.client_buffers.get(client_id)
                 
-                # Отправляем результат немедленно
-                await self.instant_processor._send_instant_result(client_id, command_data)
-                
-                # Обновляем статистику
-                response_time = time.time() - start_time
-                self.instant_stats['instant_commands_executed'] += 1
-                self.instant_stats['total_instant_response_time'] += response_time
-                self.instant_stats['average_instant_response_time'] = (
-                    self.instant_stats['total_instant_response_time'] / 
-                    self.instant_stats['instant_commands_executed']
-                )
-                
-                print(f"⚡ Instant response time: {response_time*1000:.1f}ms")
-                
-                # ВАЖНО: Блокируем дальнейшую обработку через обычные системы
-                # чтобы избежать дублирования результатов
-                await self._mark_command_as_processed(client_id, text)
-                
-                return True
-                
-            elif completeness == CommandCompleteness.INCOMPLETE:
-                # Команда неполная - отправляем обратную связь
-                print(f"⏳ PARTIAL COMMAND detected: '{text}'")
-                await self.instant_processor._send_partial_feedback(client_id, text)
-                self.instant_stats['partial_commands_detected'] += 1
-                
-                return False
-        
-        except Exception as e:
-            logger.error(f"❌ Error in instant execution check: {e}")
-            return False
-        
-        return False
+                if buffer and hasattr(buffer, 'audio_buffer') and len(buffer.audio_buffer) > 32000:  # 2+ секунды
+                    
+                    # Быстрая промежуточная транскрипция
+                    try:
+                        # Берем последние 2 секунды для быстрой проверки
+                        quick_audio = buffer.audio_buffer[-32000:]
+                        #quick_text, _, _ = self.base_processor.asr.transcribe(quick_audio)
+                        qick_text, _, _ = self.base_processor.asr.transcribe_fast_preview(quick_audio)
+                        if quick_text and len(quick_text.split()) >= 6:  # Достаточно слов
+                            
+                            print(f"🔍 PREDICTIVE CHECK: '{quick_text}'")
+                            
+                            # Проверяем instant completeness
+                            completeness, command_data = self.instant_processor.analyzer.analyze_command_completeness(quick_text, client_id)
+                            
+                            if completeness == CommandCompleteness.COMPLETE:
+                                print(f"🚀 PREDICTIVE INSTANT EXECUTION: '{quick_text}'")
+                                
+                                # Мгновенное выполнение
+                                asyncio.create_task(
+                                    self.instant_processor._send_instant_result(client_id, command_data)
+                                )
+                                
+                                # Отмечаем как уже обработанное
+                                self._mark_command_as_processed_sync(client_id, quick_text)
+                                
+                                # Обновляем статистику
+                                self.instant_stats['instant_commands_executed'] += 1
+                                
+                    except Exception as e:
+                        # Игнорируем ошибки predictive проверки
+                        print(f"⚠️ Predictive error: {e}")
+                        pass
     
-    async def _mark_command_as_processed(self, client_id: str, text: str):
-        """Помечаем команду как уже обработанную чтобы избежать дублирования"""
-        
-        # Сохраняем в кэше обработанных команд
+    
+    
+    def _mark_command_as_processed_sync(self, client_id: str, text: str):
+        """Синхронная версия блокировки команды"""
         if not hasattr(self, '_processed_commands'):
             self._processed_commands = {}
         
@@ -111,15 +181,29 @@ class EnhancedProcessorWithInstantCommands:
             'timestamp': time.time(),
             'processed_instantly': True
         }
-        
-        # Очищаем старые записи (храним только последние 10 минут)
-        current_time = time.time()
-        expired_keys = [
-            key for key, data in self._processed_commands.items()
-            if current_time - data['timestamp'] > 600  # 10 минут
-        ]
-        for key in expired_keys:
-            del self._processed_commands[key]
+        print(f"🔒 COMMAND LOCKED: '{text}' from {client_id}")
+
+    def _send_partial_feedback_sync(self, client_id: str, partial_text: str):
+        """Синхронная отправка промежуточной обратной связи"""
+        if self.web_clients:
+            feedback_message = {
+                "type": "partial_command_feedback",
+                "client_id": client_id,
+                "partial_text": partial_text,
+                "status": "waiting_for_completion",
+                "timestamp": time.time()
+            }
+            
+            message_json = json.dumps(feedback_message)
+            
+            # Синхронная отправка через loop
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                for client in list(self.web_clients):
+                    try:
+                        loop.create_task(client.send(message_json))
+                    except:
+                        pass
     
     def is_command_already_processed(self, client_id: str, text: str) -> bool:
         """Проверка была ли команда уже обработана мгновенно"""
@@ -135,10 +219,13 @@ class EnhancedProcessorWithInstantCommands:
         """
         МОДИФИЦИРОВАННАЯ обработка с проверкой мгновенного выполнения
         """
-        
+        if hasattr(self, 'is_command_already_processed') and self.is_command_already_processed(client_id, text):
+            print(f"⚡ SKIPPING - Command already processed instantly: '{text}'")
+            return
         # Проверяем, была ли команда уже обработана мгновенно
         if self.is_command_already_processed(client_id, text):
-            print(f"⚡ Command already processed instantly, skipping enhanced systems: '{text}'")
+            print(f"⚡ COMMAND ALREADY PROCESSED INSTANTLY - SKIPPING ALL SYSTEMS: '{text}'")
+            print(f"🚫 Enhanced systems bypassed for instant command")
             return
         
         # Если не была обработана мгновенно, продолжаем обычную обработку
@@ -167,10 +254,26 @@ class EnhancedProcessorWithInstantCommands:
         
         return stats
 
-# Модификация основного обработчика ASR клиентов
+    # ИСПРАВЛЕНИЕ: Делегируем другие методы базовому процессору
+    def __getattr__(self, name):
+        """Делегирование всех остальных атрибутов к базовому процессору"""
+        return getattr(self.base_processor, name)
+
+# ИСПРАВЛЕННАЯ функция создания процессора
+def create_enhanced_processor_with_instant_commands(base_processor, web_clients_ref):
+    """
+    ИСПРАВЛЕННОЕ создание расширенного процессора с поддержкой мгновенных команд
+    """
+    
+    enhanced_processor = EnhancedProcessorWithInstantCommands(base_processor, web_clients_ref)
+    
+    logger.info("🚀 Enhanced processor with instant commands created")
+    return enhanced_processor
+
+# ИСПРАВЛЕННЫЙ обработчик ASR клиентов
 async def handle_asr_client_with_instant_commands(websocket, enhanced_processor):
     """
-    МОДИФИЦИРОВАННЫЙ обработчик ASR клиентов с мгновенным выполнением
+    ИСПРАВЛЕННЫЙ обработчик ASR клиентов с мгновенным выполнением
     """
     client_addr = websocket.remote_address
     client_id = f"{client_addr[0]}_{client_addr[1]}_{int(time.time())}"
@@ -201,8 +304,25 @@ async def handle_asr_client_with_instant_commands(websocket, enhanced_processor)
                         
                         # ОБРАБОТКА ЧЕРЕЗ РАСШИРЕННЫЙ ПРОЦЕССОР С МГНОВЕННЫМИ КОМАНДАМИ
                         if enhanced_processor:
-                            result = enhanced_processor.process_audio_chunk(client_id, audio_chunk)
-                            
+                            result = enhanced_processor.process_audio_chunk_with_predictive(client_id, audio_chunk)
+                            # ДОБАВИТЬ эту проверку:
+                            if result is not None and result.strip():
+                                # Проверяем instant execution СИНХРОННО
+                                try:
+                                    completeness, command_data = enhanced_processor.instant_processor.analyzer.analyze_command_completeness(result, client_id)
+                                    if completeness == CommandCompleteness.COMPLETE:
+                                        print(f"🚀 INSTANT EXECUTION TRIGGERED!")
+                                        # Создаем задачу для мгновенной отправки
+                                        asyncio.create_task(
+                                            enhanced_processor.instant_processor._send_instant_result(client_id, command_data)
+                                        )
+                                except Exception as e:
+                                    print(f"❌ Instant check error: {e}")
+            
+                            if result and isinstance(result, str) and result.strip():
+                                asyncio.create_task(
+                                    enhanced_processor.instant_processor.process_instant_command(client_id, result)
+                                )
                             if result is not None:
                                 if result.strip():
                                     try:
@@ -235,7 +355,7 @@ async def handle_asr_client_with_instant_commands(websocket, enhanced_processor)
                         client_error_count += 1
                         
                 elif isinstance(message, str):
-                    # Обработка текстовых команд
+                    # Обработка текстовых команд (PING, STATS и т.д.)
                     current_time = time.time()
                     
                     if message == "PING":
@@ -244,11 +364,8 @@ async def handle_asr_client_with_instant_commands(websocket, enhanced_processor)
                         
                     elif message == "STATS":
                         if enhanced_processor:
-                            # Объединяем обычную статистику со статистикой мгновенного выполнения
-                            stats = enhanced_processor.base_processor.stats.copy()
-                            instant_stats = enhanced_processor.get_instant_stats()
-                            stats.update(instant_stats)
-                            
+                            # ИСПРАВЛЕНИЕ: Используем прокси-доступ к статистике
+                            stats = enhanced_processor.stats.copy()
                             stats['server_uptime'] = current_time - stats.get('server_uptime_start', current_time)
                             stats['instant_system_version'] = 'instant_commands_v1'
                             
@@ -257,22 +374,14 @@ async def handle_asr_client_with_instant_commands(websocket, enhanced_processor)
                             except asyncio.TimeoutError:
                                 logger.warning(f"⚠️ Timeout sending stats to {client_id}")
                                 
-                    elif message == "INSTANT_STATS":
-                        # Специальная команда для получения только статистики мгновенного выполнения
-                        if enhanced_processor:
-                            instant_stats = enhanced_processor.get_instant_stats()
-                            try:
-                                await asyncio.wait_for(websocket.send(json.dumps(instant_stats)), timeout=3.0)
-                            except asyncio.TimeoutError:
-                                logger.warning(f"⚠️ Timeout sending instant stats to {client_id}")
-                                
                     elif message == "MODEL_INFO":
                         if enhanced_processor:
-                            model_info = enhanced_processor.base_processor.asr.get_info()
+                            # ИСПРАВЛЕНИЕ: Используем прокси-доступ к ASR
+                            model_info = enhanced_processor.asr.get_info()
                             model_info.update({
                                 'instant_commands_enabled': True,
                                 'instant_response_target_ms': 100,
-                                'instant_command_patterns': 7,  # Количество поддерживаемых паттернов
+                                'instant_command_patterns': 7,
                                 'enhanced_mode': 'INSTANT_COMMANDS_V1',
                                 'command_prediction': True,
                                 'real_time_execution': True
@@ -296,77 +405,6 @@ async def handle_asr_client_with_instant_commands(websocket, enhanced_processor)
         logger.error(f"❌ ASR client error: {e}")
     finally:
         # Очистка буферов клиента
-        if enhanced_processor and hasattr(enhanced_processor.base_processor, 'segmentation_processor'):
-            enhanced_processor.base_processor.segmentation_processor.cleanup_client(client_id)
+        if enhanced_processor and hasattr(enhanced_processor, 'segmentation_processor') and enhanced_processor.segmentation_processor:
+            enhanced_processor.segmentation_processor.cleanup_client(client_id)
             logger.debug(f"🗑️ Cleaned up buffers for {client_id}")
-
-def create_enhanced_processor_with_instant_commands(base_processor, web_clients_ref):
-    """
-    Создание расширенного процессора с поддержкой мгновенных команд
-    """
-    
-    enhanced_processor = EnhancedProcessorWithInstantCommands(base_processor, web_clients_ref)
-    
-    # Заменяем метод обработки enhanced систем
-    if hasattr(base_processor, 'process_with_enhanced_systems'):
-        base_processor.process_with_enhanced_systems = enhanced_processor.process_with_enhanced_systems
-    
-    logger.info("🚀 Enhanced processor with instant commands created")
-    return enhanced_processor
-
-# Интеграция с основным сервером
-async def integrate_instant_commands_into_server(original_main_function):
-    """
-    Интеграция системы мгновенных команд в основной сервер
-    """
-    
-    print("\n" + "⚡" * 80)
-    print("   🚀 INSTANT COMMAND SYSTEM INTEGRATION")
-    print("   ⚡ МГНОВЕННОЕ ВЫПОЛНЕНИЕ СТОМАТОЛОГИЧЕСКИХ КОМАНД")
-    print("   • ПРЕДИКТИВНЫЙ АНАЛИЗ ЗАВЕРШЕННОСТИ КОМАНД")
-    print("   • МГНОВЕННАЯ ОТПРАВКА РЕЗУЛЬТАТОВ (<100ms)")
-    print("   • ПРЕДОТВРАЩЕНИЕ ДУБЛИРОВАНИЯ ОБРАБОТКИ")
-    print("   • ПОДДЕРЖКА 7 ТИПОВ КОМАНД")
-    print("   • REAL-TIME ОБРАТНАЯ СВЯЗЬ")
-    print("⚡" * 80)
-    
-    # Запускаем оригинальную функцию main
-    await original_main_function()
-
-if __name__ == "__main__":
-    print("🚀 INSTANT COMMAND SYSTEM - Integration Module")
-    print("=" * 60)
-    print("📋 ПОДДЕРЖИВАЕМЫЕ КОМАНДЫ ДЛЯ МГНОВЕННОГО ВЫПОЛНЕНИЯ:")
-    print()
-    print("1. 🦷 PROBING DEPTH:")
-    print("   'probing depth on tooth number 14 buccal surface 3 2 4'")
-    print("   ⚡ Выполняется мгновенно при произнесении последнего числа")
-    print()
-    print("2. 🔄 MOBILITY:")
-    print("   'tooth 8 has mobility grade 2'")
-    print("   ⚡ Выполняется мгновенно при произнесении grade + число")
-    print()
-    print("3. 🩸 BLEEDING ON PROBING:")
-    print("   'bleeding on probing tooth 12 buccal distal'")
-    print("   ⚡ Выполняется мгновенно при произнесении позиции")
-    print()
-    print("4. 💧 SUPPURATION:")
-    print("   'suppuration present on tooth 8 lingual mesial'")
-    print("   ⚡ Выполняется мгновенно при произнесении позиции")
-    print()
-    print("5. 🔱 FURCATION:")
-    print("   'furcation class 2 on tooth 6'")
-    print("   ⚡ Выполняется мгновенно при полной команде")
-    print()
-    print("6. 📐 GINGIVAL MARGIN:")
-    print("   'gingival margin on tooth 14 minus 1 0 plus 1'")
-    print("   ⚡ Выполняется мгновенно при 3 значениях")
-    print()
-    print("7. ❌ MISSING TEETH:")
-    print("   'missing teeth 1 16 17 32'")
-    print("   ⚡ Выполняется мгновенно при списке номеров")
-    print()
-    print("🎯 ЦЕЛЕВОЕ ВРЕМЯ ОТКЛИКА: <100ms")
-    print("📊 ПРЕДОТВРАЩЕНИЕ ДУБЛИРОВАНИЯ: Автоматическое")
-    print("⏳ ПРОМЕЖУТОЧНАЯ ОБРАТНАЯ СВЯЗЬ: Для неполных команд")
-    print("=" * 60)

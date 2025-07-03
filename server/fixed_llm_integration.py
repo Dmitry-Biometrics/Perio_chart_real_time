@@ -319,7 +319,7 @@ def initialize_fixed_llm_integration(openai_api_key: str) -> bool:
 
 async def process_transcription_with_fixed_llm(text: str, confidence: float = 0.0, patient_id: str = None) -> Dict:
     """
-    ИСПРАВЛЕННАЯ функция для интеграции с основным сервером
+    КЭШИРОВАННАЯ функция для интеграции с основным сервером
     """
     if not fixed_llm_integration or not fixed_llm_integration.enabled:
         return {
@@ -328,7 +328,26 @@ async def process_transcription_with_fixed_llm(text: str, confidence: float = 0.
             "message": "FIXED LLM Integration not initialized"
         }
     
-    return await fixed_llm_integration.process_transcription(text, confidence, patient_id)
+    # ПРОВЕРЯЕМ КЭША ПЕРВЫМ ДЕЛОМ
+    try:
+        from llm_cache import llm_cache
+        cached_result = llm_cache.get(text)
+        if cached_result:
+            return cached_result
+    except ImportError:
+        pass  # Кэш недоступен
+    
+    # Обрабатываем через LLM
+    result = await fixed_llm_integration.process_transcription(text, confidence, patient_id)
+    
+    # Сохраняем в кэш
+    try:
+        from llm_cache import llm_cache
+        llm_cache.put(text, result)
+    except ImportError:
+        pass
+    
+    return result
 
 def is_periodontal_command_fixed_llm(text: str) -> bool:
     """

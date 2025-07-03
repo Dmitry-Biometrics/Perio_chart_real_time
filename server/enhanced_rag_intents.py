@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 from dataclasses import dataclass
 from enum import Enum
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -682,6 +683,7 @@ class EnhancedRAGSystem:
     def __init__(self, openai_api_key: str = None):
         self.intent_classifier = DentalIntentClassifier()
         self.openai_api_key = openai_api_key
+        self.logger = logging.getLogger(__name__)
         
         # RAG specific data
         self.knowledge_base = self._initialize_knowledge_base()
@@ -695,7 +697,119 @@ class EnhancedRAGSystem:
         }
         
         logger.info("🧠 Enhanced RAG System with Intent Classification initialized")
+        
+        
+    def _enhance_with_rag(self, command, entities, context=None):
+        """Улучшение команды с помощью RAG"""
+        try:
+            # Базовая логика улучшения
+            enhanced_entities = entities.copy()
+            
+            # Добавить контекстную информацию
+            if 'tooth_number' in entities:
+                tooth_context = self._get_tooth_context(entities['tooth_number'])
+                enhanced_entities.update(tooth_context)
+            
+            return enhanced_entities
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error in _enhance_with_rag: {e}")
+            return entities    
+            
     
+            
+    def _handle_bleeding_on_probing(self, command, entities):
+        """Обработка команд о кровоточивости"""
+        try:
+            result = {
+                'type': 'bleeding_on_probing',
+                'tooth_number': entities.get('tooth_number'),
+                'surface': entities.get('surface'),
+                'position': entities.get('position'),
+                'command': command
+            }
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error in _handle_bleeding_on_probing: {e}")
+            return entities
+    
+    def _handle_suppuration(self, command, entities):
+        """Обработка команд о нагноении"""
+        try:
+            result = {
+                'type': 'suppuration',
+                'tooth_number': entities.get('tooth_number'),
+                'surface': entities.get('surface'),
+                'position': entities.get('position'),
+                'command': command
+            }
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error in _handle_suppuration: {e}")
+            return entities            
+            
+    def _extract_tooth_numbers(self, command):
+        """Извлечение номеров зубов из команды"""
+        import re
+        
+        # Поиск чисел в команде
+        numbers = re.findall(r'\d+', command)
+        
+        # Поиск словесных числительных
+        word_numbers = {
+            'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+            'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
+            'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18,
+            'nineteen': 19, 'twenty': 20, 'thirty': 30, 'thirty-two': 32
+        }
+        
+        words = command.lower().split()
+        for word in words:
+            if word in word_numbers:
+                numbers.append(str(word_numbers[word]))
+        
+        return [int(n) for n in numbers if 1 <= int(n) <= 32]
+    
+    def _get_tooth_context(self, tooth_number):
+        """Получение контекста зуба"""
+        # Базовая информация о зубе
+        context = {
+            'tooth_type': self._get_tooth_type(tooth_number),
+            'quadrant': self._get_quadrant(tooth_number),
+            'arch': 'upper' if tooth_number <= 16 else 'lower'
+        }
+        
+        return context
+    
+    def _get_tooth_type(self, tooth_number):
+        """Определение типа зуба"""
+        tooth_in_quadrant = ((tooth_number - 1) % 8) + 1
+        
+        if tooth_in_quadrant <= 2:
+            return 'incisor'
+        elif tooth_in_quadrant == 3:
+            return 'canine'
+        elif tooth_in_quadrant <= 5:
+            return 'premolar'
+        else:
+            return 'molar'
+    
+    def _get_quadrant(self, tooth_number):
+        """Определение квадранта"""
+        if 1 <= tooth_number <= 8:
+            return 1
+        elif 9 <= tooth_number <= 16:
+            return 2
+        elif 17 <= tooth_number <= 24:
+            return 3
+        else:
+            return 4
+            
     def _initialize_knowledge_base(self) -> Dict[str, Any]:
         """Initialize the dental knowledge base"""
         
@@ -772,7 +886,8 @@ class EnhancedRAGSystem:
             # Step 3: Enhance with RAG if needed
             if classification.confidence < 0.7 or not result.get('success'):
                 result = await self._enhance_with_rag(classification, result, context)
-                self.session_stats['rag_assisted_commands'] += 1
+                if result:
+                    self.session_stats['rag_assisted_commands'] += 1
             
             # Step 4: Add intent information to result
             result.update({
@@ -814,7 +929,7 @@ class EnhancedRAGSystem:
         validated_entities = entities
         
         if intent == DentalIntent.PROBING_DEPTH:
-            return self._handle_probing_depth_strict(validated_entities, classification.raw_text)
+            return self._handle_probing_depth(entities, classification.raw_text)
         
         elif intent == DentalIntent.BLEEDING_ON_PROBING:
             return self._handle_bleeding_on_probing(entities, classification.raw_text)
@@ -827,9 +942,9 @@ class EnhancedRAGSystem:
         
         elif intent == DentalIntent.FURCATION:
             return self._handle_furcation(entities, classification.raw_text)
-        
+             
         elif intent == DentalIntent.GINGIVAL_MARGIN:
-            return self._handle_gingival_margin_strict(validated_entities, classification.raw_text)
+            return self._handle_gingival_margin(validated_entities, classification.raw_text)
         
         elif intent == DentalIntent.MISSING_TEETH:
             return self._handle_missing_teeth(entities, classification.raw_text)
@@ -919,6 +1034,194 @@ class EnhancedRAGSystem:
             'original_preserved': True
         }
     
+    def _handle_probing_depth(self, entities: Dict, raw_text: str) -> Dict[str, Any]:
+        """Handle probing depth commands"""
+        
+        tooth_number = entities.get('tooth_number')
+        surface = entities.get('surface', 'buccal')
+        measurements = entities.get('measurements', [])
+        
+        if not tooth_number:
+            return {
+                'success': False,
+                'error': 'missing_tooth_number',
+                'message': 'Please specify a tooth number (1-32)'
+            }
+        
+        # Валидация tooth number
+        if not isinstance(tooth_number, int) or tooth_number < 1 or tooth_number > 32:
+            return {
+                'success': False,
+                'error': 'invalid_tooth_number',
+                'message': f'Tooth number must be between 1-32, got: {tooth_number}',
+            }
+        
+        if not measurements or len(measurements) != 3:
+            return {
+                'success': False,
+                'error': 'invalid_measurements',
+                'message': 'Please provide three probing depth measurements'
+            }
+        
+        # Validate measurements
+        for i, measurement in enumerate(measurements):
+            if not isinstance(measurement, int) or measurement < 1 or measurement > 12:
+                return {
+                    'success': False,
+                    'error': 'invalid_measurement_value',
+                    'message': f'Measurement {i+1} ({measurement}) must be between 1-12mm'
+                }
+        
+        return {
+            'success': True,
+            'command': 'update_periodontal_chart',
+            'tooth_number': tooth_number,
+            'measurement_type': 'probing_depth',
+            'surface': surface,
+            'values': measurements,
+            'measurements': {'probing_depth': measurements},
+            'message': f"✅ Probing depths recorded for tooth {tooth_number} {surface}: {'-'.join(map(str, measurements))}mm",
+            'confidence': 0.9
+        }
+    
+        
+    def _handle_missing_teeth(self, entities: Dict, raw_text: str) -> Dict[str, Any]:
+        """ИСПРАВЛЕННАЯ обработка команд missing teeth с правильным извлечением номеров зубов"""
+        
+        print(f"🦷 PROCESSING MISSING TEETH: '{raw_text}'")
+        print(f"📊 Entities: {entities}")
+        
+        tooth_numbers = []
+        
+        # 1. Проверяем entity tooth_number (если есть)
+        if 'tooth_number' in entities:
+            tooth_num = entities['tooth_number']
+            if isinstance(tooth_num, list):
+                tooth_numbers.extend([n for n in tooth_num if isinstance(n, int) and 1 <= n <= 32])
+            elif isinstance(tooth_num, int) and 1 <= tooth_num <= 32:
+                tooth_numbers.append(tooth_num)
+            print(f"✅ From tooth_number entity: {tooth_numbers}")
+        
+        # 2. Проверяем measurements (КРИТИЧЕСКИ ВАЖНО)
+        if 'measurements' in entities:
+            measurements = entities['measurements']
+            if isinstance(measurements, list):
+                valid_nums = [m for m in measurements if isinstance(m, int) and 1 <= m <= 32]
+                tooth_numbers.extend(valid_nums)
+                print(f"✅ From measurements entity: {valid_nums}")
+        
+        # 3. Парсим сырой текст для извлечения чисел
+        tooth_numbers_from_text = self._extract_tooth_numbers_from_text(raw_text)
+        tooth_numbers.extend(tooth_numbers_from_text)
+        print(f"✅ From text parsing: {tooth_numbers_from_text}")
+        
+        # 4. Убираем дубликаты
+        tooth_numbers = list(set(tooth_numbers))
+        tooth_numbers.sort()
+        
+        print(f"🎯 FINAL TOOTH NUMBERS: {tooth_numbers}")
+        
+        if not tooth_numbers:
+            return {
+                'success': False,
+                'error': 'no_teeth_specified',
+                'message': 'Please specify which teeth are missing',
+                'suggestion': 'Try: "Missing teeth 1 16 17 32"'
+            }
+        
+        # 5. Проверяем валидность номеров зубов
+        invalid_teeth = [t for t in tooth_numbers if not (1 <= t <= 32)]
+        if invalid_teeth:
+            return {
+                'success': False,
+                'error': 'invalid_tooth_numbers',
+                'message': f'Invalid tooth numbers: {invalid_teeth}. Valid range is 1-32.',
+                'tooth_numbers': tooth_numbers
+            }
+        
+        # 6. Формируем успешный ответ
+        return {
+            'success': True,
+            'command': 'update_periodontal_chart',
+            'measurement_type': 'missing_teeth',
+            'type': 'missing_teeth',  # Для совместимости
+            'tooth_numbers': tooth_numbers,  # Основной список
+            'teeth': tooth_numbers,  # Альтернативное имя
+            'values': tooth_numbers,  # Еще одно альтернативное имя
+            'missing_teeth': tooth_numbers,  # Для веб-клиента
+            'measurements': {
+                'missing_teeth': tooth_numbers,
+                'teeth': tooth_numbers,
+                'values': tooth_numbers
+            },
+            'message': f"✅ Missing teeth marked: {', '.join(map(str, tooth_numbers))}",
+            'confidence': 0.95
+        }
+
+    def _extract_tooth_numbers_from_text(self, text: str) -> List[int]:
+        """Извлечение номеров зубов из текста с поддержкой числовых слов"""
+        
+        tooth_numbers = []
+        
+        # Словарь конвертации слов в числа
+        word_to_num = {
+            'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+            'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
+            'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18,
+            'nineteen': 19, 'twenty': 20, 'twenty-one': 21, 'twenty-two': 22,
+            'twenty-three': 23, 'twenty-four': 24, 'twenty-five': 25,
+            'twenty-six': 26, 'twenty-seven': 27, 'twenty-eight': 28,
+            'twenty-nine': 29, 'thirty': 30, 'thirty-one': 31, 'thirty-two': 32
+        }
+        
+        import re
+        
+        print(f"🔍 EXTRACTING TOOTH NUMBERS FROM: '{text}'")
+        
+        # 1. Ищем цифры в тексте
+        digit_matches = re.findall(r'\b(\d+)\b', text)
+        for match in digit_matches:
+            num = int(match)
+            if 1 <= num <= 32:
+                tooth_numbers.append(num)
+                print(f"🔢 Found digit: {num}")
+        
+        # 2. Ищем числовые слова
+        words = text.lower().split()
+        for word in words:
+            clean_word = re.sub(r'[^\w]', '', word)  # Убираем знаки препинания
+            if clean_word in word_to_num:
+                num = word_to_num[clean_word]
+                if 1 <= num <= 32:
+                    tooth_numbers.append(num)
+                    print(f"🔤 Found word '{clean_word}': {num}")
+        
+        # 3. Специальная обработка для "missing this/that/too"
+        if 'missing this' in text.lower():
+            # "missing this" часто означает "missing tooth 1" или последний упомянутый зуб
+            # Для безопасности возвращаем 1
+            if 1 not in tooth_numbers:
+                tooth_numbers.append(1)
+                print(f"🔤 'missing this' interpreted as tooth 1")
+        
+        if 'missing that' in text.lower():
+            if 1 not in tooth_numbers:
+                tooth_numbers.append(1)
+                print(f"🔤 'missing that' interpreted as tooth 1")
+        
+        # Обработка "too" как "two"
+        if 'too' in text.lower() and 'missing' in text.lower():
+            if 2 not in tooth_numbers:
+                tooth_numbers.append(2)
+                print(f"🔤 'too' in missing context interpreted as tooth 2")
+        
+        # Убираем дубликаты и сортируем
+        tooth_numbers = sorted(list(set(tooth_numbers)))
+        print(f"✅ EXTRACTED TOOTH NUMBERS: {tooth_numbers}")
+        
+        return tooth_numbers    
+    
     def _extract_gingival_margin_values_strict(self, text: str) -> List[int]:
         """СТРОГОЕ извлечение gingival margin значений с сохранением оригинала"""
         
@@ -961,6 +1264,9 @@ class EnhancedRAGSystem:
             return [-int(numbers[0]), int(numbers[1]), int(numbers[2])]
         
         return []
+    
+        
+    
     
 def _extract_measurements_inline(self, text: str) -> List[int]:
     """ИСПРАВЛЕННОЕ извлечение измерений с обработкой знаков для gingival margin"""
@@ -1079,6 +1385,49 @@ def _extract_measurements_inline(self, text: str) -> List[int]:
             while len(values) < 3:
                 values.append(0)
             return values   
+    
+    
+    def _handle_probing_depth(self, entities: Dict, raw_text: str) -> Dict[str, Any]:
+        """Handle probing depth commands"""
+        
+        tooth_number = entities.get('tooth_number')
+        surface = entities.get('surface', 'buccal')
+        measurements = entities.get('measurements', [])
+        
+        if not tooth_number:
+            return {
+                'success': False,
+                'error': 'missing_tooth_number',
+                'message': 'Please specify a tooth number (1-32)'
+            }
+        
+        if not measurements or len(measurements) != 3:
+            return {
+                'success': False,
+                'error': 'invalid_measurements',
+                'message': 'Please provide three probing depth measurements'
+            }
+        
+        # Validate measurements
+        for measurement in measurements:
+            if not isinstance(measurement, int) or measurement < 1 or measurement > 12:
+                return {
+                    'success': False,
+                    'error': 'invalid_measurement_value',
+                    'message': 'Probing depths must be between 1-12mm'
+                }
+        
+        return {
+            'success': True,
+            'command': 'update_periodontal_chart',
+            'tooth_number': tooth_number,
+            'measurement_type': 'probing_depth',
+            'surface': surface,
+            'values': measurements,
+            'measurements': {'probing_depth': measurements},
+            'message': f"✅ Probing depths recorded for tooth {tooth_number} {surface}: {'-'.join(map(str, measurements))}mm",
+            'confidence': 0.9
+        }
     
     def _handle_probing_depth_strict(self, entities: Dict, raw_text: str) -> Dict[str, Any]:
         """ИСПРАВЛЕННАЯ обработка probing depth"""
@@ -1379,12 +1728,13 @@ def _extract_measurements_inline(self, text: str) -> List[int]:
             'confidence': 0.9
         }
     
+
     def _handle_missing_teeth(self, entities: Dict, raw_text: str) -> Dict[str, Any]:
-        """Handle missing teeth commands"""
+        """Handle missing teeth commands - ОБЪЕДИНЕННАЯ ВЕРСИЯ"""
         
         tooth_numbers = []
         
-        # Check if specific tooth numbers are mentioned
+        # 1. Проверка entities (из первой функции)
         if 'tooth_number' in entities:
             tooth_num = entities['tooth_number']
             if isinstance(tooth_num, list):
@@ -1392,21 +1742,35 @@ def _extract_measurements_inline(self, text: str) -> List[int]:
             else:
                 tooth_numbers.append(tooth_num)
         
-        # Extract additional tooth numbers from text
+        # 2. Проверка measurements из entities (ИСПРАВЛЕНИЕ!)
+        if 'measurements' in entities:
+            measurements = entities['measurements']
+            if isinstance(measurements, list):
+                tooth_numbers.extend([m for m in measurements if isinstance(m, int) and 1 <= m <= 32])
+        
+        # 3. Обработка "too" как "two" = зуб 2
+        if 'too' in raw_text.lower() or 'two' in raw_text.lower():
+            if 2 not in tooth_numbers:
+                tooth_numbers.append(2)
+        
+        # 4. Извлечение номеров зубов из текста
+        import re
         tooth_matches = re.findall(r'\b(\d+)\b', raw_text)
         for match in tooth_matches:
             tooth_num = int(match)
             if 1 <= tooth_num <= 32 and tooth_num not in tooth_numbers:
                 tooth_numbers.append(tooth_num)
         
-        # Handle "missing this one" - need context to determine which tooth
-        if not tooth_numbers and 'this one' in raw_text.lower():
-            return {
-                'success': False,
-                'error': 'ambiguous_tooth_reference',
-                'message': 'Please specify which tooth number is missing'
-            }
+        # 5. Дополнительная попытка извлечения (из второй функции)
+        if not tooth_numbers:
+            try:
+                extracted = self._extract_tooth_numbers(raw_text)
+                if extracted:
+                    tooth_numbers.extend(extracted)
+            except Exception as e:
+                self.logger.warning(f"⚠️ _extract_tooth_numbers failed: {e}")
         
+        # 6. Проверка результата
         if not tooth_numbers:
             return {
                 'success': False,
@@ -1414,11 +1778,15 @@ def _extract_measurements_inline(self, text: str) -> List[int]:
                 'message': 'Please specify which teeth are missing'
             }
         
+        # 7. КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: правильный формат возврата
         return {
             'success': True,
             'command': 'update_periodontal_chart',
             'measurement_type': 'missing_teeth',
-            'values': tooth_numbers,
+            'type': 'missing_teeth',  # ⭐ Добавлено для совместимости
+            'teeth': tooth_numbers,   # ⭐ Для второй функции
+            'values': tooth_numbers,  # ⭐ Для первой функции
+            'missing_teeth': tooth_numbers,  # ⭐ ДЛЯ LLM!
             'measurements': {'missing_teeth': tooth_numbers},
             'message': f"✅ Missing teeth marked: {', '.join(map(str, tooth_numbers))}",
             'confidence': 0.9
