@@ -715,9 +715,7 @@ class EnhancedRAGSystem:
         except Exception as e:
             self.logger.error(f"❌ Error in _enhance_with_rag: {e}")
             return entities    
-            
-    
-            
+                       
     def _handle_bleeding_on_probing(self, command, entities):
         """Обработка команд о кровоточивости"""
         try:
@@ -1265,7 +1263,58 @@ class EnhancedRAGSystem:
         
         return []
     
+    def _handle_gingival_margin(self, entities: Dict, raw_text: str) -> Dict[str, Any]:
+        """Handle gingival margin commands"""
         
+        tooth_number = entities.get('tooth_number')
+        
+        if not tooth_number:
+            return {
+                'success': False,
+                'error': 'missing_tooth_number',
+                'message': 'Please specify a tooth number (1-32)'
+            }
+        
+        # Валидация tooth number
+        if not isinstance(tooth_number, int) or tooth_number < 1 or tooth_number > 32:
+            return {
+                'success': False,
+                'error': 'invalid_tooth_number',
+                'message': f'Tooth number must be between 1-32, got: {tooth_number}',
+            }
+        
+        # Extract gingival margin measurements
+        measurements = entities.get('measurements', [])
+        
+        if not measurements or len(measurements) < 3:
+            return {
+                'success': False,
+                'error': 'invalid_gm_measurements',
+                'message': 'Please provide three gingival margin measurements'
+            }
+        
+        # Берем первые 3 значения
+        gm_values = measurements[:3]
+        
+        # Валидация значений (gingival margin может быть отрицательным)
+        for i, value in enumerate(gm_values):
+            if not isinstance(value, int) or value < -10 or value > 10:
+                return {
+                    'success': False,
+                    'error': 'invalid_gm_value',
+                    'message': f'Gingival margin {i+1} ({value}) must be between -10 to +10mm'
+                }
+        
+        return {
+            'success': True,
+            'command': 'update_periodontal_chart',
+            'tooth_number': tooth_number,
+            'measurement_type': 'gingival_margin',
+            'values': gm_values,
+            'measurements': {'gingival_margin': gm_values},
+            'message': f"✅ Gingival margin tooth {tooth_number}: {' '.join(map(str, gm_values))}mm",
+            'confidence': 0.9
+        }       
     
     
 def _extract_measurements_inline(self, text: str) -> List[int]:

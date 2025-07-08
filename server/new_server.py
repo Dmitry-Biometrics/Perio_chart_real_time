@@ -9,6 +9,7 @@
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+import re
 import asyncio
 import websockets
 import numpy as np
@@ -153,12 +154,12 @@ ENHANCED_CONFIG = {
     "keep_recordings_days": 30,
     
     # КРИТИЧЕСКИ ИСПРАВЛЕННЫЕ настройки сегментации
-    "segmentation_speech_threshold": 0.15,
+    "segmentation_speech_threshold": 0.25,
     "segmentation_silence_threshold": 0.15,
     "min_command_duration": 0.8,
     "max_command_duration": 20.0,
     "speech_confirmation_chunks": 1,
-    "silence_confirmation_chunks": 2,
+    "silence_confirmation_chunks": 1,
     
     "log_commands": True,
     "max_processing_errors": 20,
@@ -806,19 +807,18 @@ class CriticallyFixedAudioProcessor:
         self.vad = vad
         self.asr = asr
         self.audio_manager = audio_manager
-        self.segmentation_processor = self 
         
         # ИСПРАВЛЕНИЕ: Используем правильное имя класса
         self.client_buffers: Dict[str, FixedClientBufferNoDrop] = {}
         
         # Конфигурация
         self.config = {
-            'segmentation_speech_threshold': 0.15,  # Понижено для лучшей чувствительности
+            'segmentation_speech_threshold': 0.25,  # Понижено для лучшей чувствительности
             'segmentation_silence_threshold': 0.15,  # Понижено
             'min_command_duration': 0.8,
             'max_command_duration': 20.0,
-            'speech_confirmation_chunks': 1,  # Понижено с 3
-            'silence_confirmation_chunks': 2   # Понижено с 8
+            'speech_confirmation_chunks': 2,  # Понижено с 3
+            'silence_confirmation_chunks': 1   # Понижено с 8
         }
         
         # Глобальная статистика
@@ -840,79 +840,50 @@ class CriticallyFixedAudioProcessor:
         print("   ✅ NO chunk skipping") 
         print("   ✅ PRECISE sequence tracking")
         print("   ✅ Thread-safe operations")
-      
-    def process_audio_chunk(self, client_id, audio_chunk):
-        '''Ультра-быстрая обработка аудио чанков'''
-        
-        try:
-            self.stats['chunks_processed'] += 1
-            
-            # Валидация (упрощённая)
-            if len(audio_chunk) == 0 or np.any(np.isnan(audio_chunk)):
-                return None
-            
-            audio_chunk = np.clip(audio_chunk, -1.0, 1.0)
-            
-            # ОСНОВНАЯ ОБРАБОТКА через сегментацию
-            if self.client_buffers is not None:
-                result = self.segmentation_processor.process_audio_chunk(client_id, audio_chunk)
-                
-                # НОВОЕ: Потоковый анализ на каждом чанке
-                if hasattr(self, 'streaming_predictor'):
-                    buffer_info = self.segmentation_processor.get_client_info(client_id)
-                    
-                    if buffer_info and buffer_info['main_buffer_duration_seconds'] > 0.75:  # 750ms
-                        buffer = self.segmentation_processor.client_buffers.get(client_id)
-                        
-                        if buffer and len(buffer.audio_buffer) > 12000:  # 0.75 секунды
-                            # Быстрая транскрипция для анализа
-                            try:
-                                preview_audio = buffer.audio_buffer[-20000:]  # Последние 1.25s
-                                quick_text, _, _ = self.asr.transcribe(preview_audio)
-                                
-                                if quick_text and len(quick_text.split()) >= 4:
-                                    # Потоковый анализ
-                                    asyncio.create_task(
-                                        self.streaming_predictor.process_streaming_chunk(
-                                            client_id, quick_text, preview_audio
-                                        )
-                                    )
-                            except:
-                                pass
-                
-                # Обычная обработка завершённых команд
-                if result and result.strip():
-                    logger.info(f"⚡ ULTRA-FAST COMMAND: '{result}'")
-                    
-                    # Обновляем статистику
-                    self._update_ultra_fast_stats(client_id)
-                    
-                    # Мгновенный анализ паттернов
-                    instant_data = self.instant_pattern_match(result)
-                    if instant_data:
-                        logger.info(f"🚀 INSTANT PATTERN: {instant_data['type']} tooth {instant_data['tooth_number']}")
-                        asyncio.create_task(self.instant_broadcast_result(client_id, instant_data))
-                        self.instant_stats['instant_executions'] += 1
-                        return result
-                    
-                    # Обычная обработка через системы
-                    asyncio.create_task(self.process_with_enhanced_systems(
-                        client_id, result, 0.95, 1.0, None, None
-                    ))
-                    
-                    # Быстрая отправка транскрипции
-                    asyncio.create_task(self.broadcast_transcription(
-                        client_id, result, 0.95, 1.0, 0.05
-                    ))
-                    
-                    return result
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"❌ Ultra-fast processing error: {e}")
-            return None
     
+    def process_audio_chunk(self, client_id: str, audio_chunk: np.ndarray) -> Optional[str]:
+        """
+        КРИТИЧЕСКИ ИСПРАВЛЕННАЯ обработка аудио чанков БЕЗ дублирования
+        """
+        
+        # Создание буфера для нового клиента - ИСПРАВЛЕНО имя класса
+        if client_id not in self.client_buffers:
+            self.client_buffers[client_id] = FixedClientBufferNoDrop(client_id, self.config)
+            self.global_stats['total_clients'] += 1
+            logger.info(f"🎯 Created CRITICALLY FIXED buffer for new client: {client_id}")
+        
+        buffer = self.client_buffers[client_id]
+        
+        # Получение VAD score
+        try:
+            vad_scores = self.vad.process_chunk(audio_chunk)
+            vad_score = vad_scores[0] if vad_scores else 0.0
+        except Exception as e:
+            logger.warning(f"VAD error for {client_id}: {e}")
+            vad_score = 0.0
+        
+        # КРИТИЧЕСКИ ИСПРАВЛЕННАЯ сегментация БЕЗ дублирования
+        completed_audio = buffer.process_chunk(audio_chunk, vad_score)
+        
+        if completed_audio is not None:
+            # Проверка целостности
+            integrity = buffer._check_integrity()
+            if not integrity['size_match']:
+                logger.error(f"❌ CRITICAL: Integrity check failed for {client_id}")
+                logger.error(f"   Expected: {integrity['expected_size']}, Got: {integrity['main_buffer_audio_size']}")
+            
+            # Аудио сегмент завершен - запускаем ASR
+            result = self._process_completed_segment(client_id, completed_audio)
+            
+            # Обновляем глобальную статистику
+            client_stats = buffer.stats
+            self.global_stats['chunks_duplicated_total'] += client_stats['chunks_duplicated']
+            self.global_stats['chunks_skipped_total'] += client_stats['chunks_skipped']
+            self.global_stats['sequence_errors_total'] += client_stats['sequence_errors']
+            
+            return result
+        
+        return None
     
     def _process_completed_segment(self, client_id: str, audio_segment: np.ndarray) -> Optional[str]:
         """Обработка завершенного аудио сегмента с диагностикой"""
@@ -1309,178 +1280,100 @@ class CriticallyFixedProcessorWithSegmentation:
             'time_saved_ms': 0
         }
         
-        self.enable_ultra_fast_mode()
-        # === Интегрируем потоковый предиктор ===
-        from streaming_predictor import integrate_streaming_predictor
-        integrate_streaming_predictor(self, web_clients)
         
-    def enable_ultra_fast_mode(self):
-        '''Включение ультра-быстрого режима для всего процессора'''
+    async def check_instant_patterns(self, text: str, client_id: str) -> bool:
+        """МГНОВЕННАЯ проверка паттернов БЕЗ LLM"""
         
-        # Настройки сегментации
-        if self.segmentation_processor:
-            for buffer in self.segmentation_processor.client_buffers.values():
-                if hasattr(buffer, 'enable_ultra_fast_mode'):
-                    buffer.enable_ultra_fast_mode()
+        # Быстрые regex паттерны для мгновенного распознавания
+        instant_patterns = {
+            'probing_depth': re.compile(
+                r'probing\s+depth.*?tooth\s+(?:number\s+)?(\w+).*?(buccal|lingual).*?(\d+)\s+(\d+)\s+(\d+)',
+                re.IGNORECASE
+            ),
+            'mobility': re.compile(
+                r'tooth\s+(\w+).*?mobility.*?grade\s+(\d+)',
+                re.IGNORECASE
+            ),
+            'bleeding': re.compile(
+                r'bleeding.*?tooth\s+(\w+)\s+(buccal|lingual)\s+(distal|mesial|mid)',
+                re.IGNORECASE
+            ),
+            'missing_teeth': re.compile(
+                r'missing.*?teeth?\s+(\w+)',
+                re.IGNORECASE
+            )
+        }
         
-        # Настройки ASR
-        if hasattr(self.asr, 'model'):
-            self.setup_ultra_fast_asr()
+        # Быстрая конвертация слов в числа
+        word_to_num = {
+            'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+            'too': 2, 'to': 2, 'for': 4, 'ate': 8, 'won': 1  # ASR ошибки
+        }
         
-        # Статистика
-        self.stats['ultra_fast_mode'] = True
-        self.stats['target_response_time_ms'] = 50
+        def convert_word(word):
+            return word_to_num.get(word.lower(), int(word) if word.isdigit() else 0)
         
-        logger.info("⚡ ULTRA-FAST MODE enabled for entire processor")
-    
-    def setup_ultra_fast_asr(self):
-        '''Настройка ASR для ультра-быстрого режима'''
-        
-        original_transcribe = self.asr.transcribe
-        
-        def ultra_fast_transcribe_wrapper(audio_np):
-            '''Обёртка для ультра-быстрой транскрипции'''
-            
-            # Предварительная фильтрация
-            rms_energy = np.sqrt(np.mean(audio_np ** 2))
-            if rms_energy < 0.001:
-                return "NO_SPEECH_DETECTED", 0.0, 0.001
-            
-            # Ограничение длины для скорости
-            if len(audio_np) > 240000:  # Больше 15 секунд
-                audio_np = audio_np[:240000]
-            
-            start_time = time.time()
-            
-            try:
-                # Ультра-быстрые параметры
-                segments, info = self.asr.model.transcribe(
-                    audio_np,
-                    language="en",
-                    beam_size=1,
-                    best_of=1,
-                    temperature=0.0,
-                    no_speech_threshold=0.8,
-                    compression_ratio_threshold=1.5,
-                    condition_on_previous_text=False,
-                    without_timestamps=True,
-                    vad_filter=True,
-                    suppress_blank=True
-                )
+        for pattern_type, pattern in instant_patterns.items():
+            match = pattern.search(text)
+            if match:
+                print(f"⚡ INSTANT PATTERN MATCHED: {pattern_type}")
                 
-                text = " ".join(segment.text.strip() for segment in segments if segment.text)
-                confidence = getattr(info, 'language_probability', 0.8)
-                processing_time = time.time() - start_time
-                
-                return text or "NO_SPEECH_DETECTED", confidence, processing_time
-                
-            except Exception as e:
-                return f"ERROR: {str(e)[:50]}", 0.0, time.time() - start_time
-        
-        self.asr.transcribe = ultra_fast_transcribe_wrapper
-        logger.info("⚡ ULTRA-FAST ASR wrapper applied")
-    
-    # МОДИФИЦИРОВАННЫЙ process_audio_chunk для ультра-быстрого режима:
-    
-    def process_audio_chunk_ultra_fast(self, client_id, audio_chunk):
-        '''Ультра-быстрая обработка аудио чанков'''
-        
-        try:
-            self.stats['chunks_processed'] += 1
-            
-            # Валидация (упрощённая)
-            if len(audio_chunk) == 0 or np.any(np.isnan(audio_chunk)):
-                return None
-            
-            audio_chunk = np.clip(audio_chunk, -1.0, 1.0)
-            
-            # ОСНОВНАЯ ОБРАБОТКА через сегментацию
-            if self.segmentation_processor:
-                result = self.segmentation_processor.process_audio_chunk(client_id, audio_chunk)
-                
-                # НОВОЕ: Потоковый анализ на каждом чанке
-                if hasattr(self, 'streaming_predictor'):
-                    buffer_info = self.segmentation_processor.get_client_info(client_id)
+                # Быстрая обработка без LLM
+                if pattern_type == 'probing_depth':
+                    tooth = convert_word(match.group(1))
+                    surface = match.group(2).lower()
+                    depths = [int(match.group(3)), int(match.group(4)), int(match.group(5))]
                     
-                    if buffer_info and buffer_info['main_buffer_duration_seconds'] > 0.75:  # 750ms
-                        buffer = self.segmentation_processor.client_buffers.get(client_id)
+                    if 1 <= tooth <= 32:
+                        await self.send_instant_result(client_id, {
+                            'tooth_number': tooth,
+                            'measurement_type': 'probing_depth',
+                            'surface': surface,
+                            'values': depths,
+                            'message': f"⚡ INSTANT: Tooth {tooth} {surface} PD: {'-'.join(map(str, depths))}mm"
+                        })
+                        return True
                         
-                        if buffer and len(buffer.audio_buffer) > 12000:  # 0.75 секунды
-                            # Быстрая транскрипция для анализа
-                            try:
-                                preview_audio = buffer.audio_buffer[-20000:]  # Последние 1.25s
-                                quick_text, _, _ = self.asr.transcribe(preview_audio)
-                                
-                                if quick_text and len(quick_text.split()) >= 4:
-                                    # Потоковый анализ
-                                    asyncio.create_task(
-                                        self.streaming_predictor.process_streaming_chunk(
-                                            client_id, quick_text, preview_audio
-                                        )
-                                    )
-                            except:
-                                pass
-                
-                # Обычная обработка завершённых команд
-                if result and result.strip():
-                    logger.info(f"⚡ ULTRA-FAST COMMAND: '{result}'")
-                    
-                    # Обновляем статистику
-                    self._update_ultra_fast_stats(client_id)
-                    
-                    # Мгновенный анализ паттернов
-                    instant_data = self.instant_pattern_match(result)
-                    if instant_data:
-                        logger.info(f"🚀 INSTANT PATTERN: {instant_data['type']} tooth {instant_data['tooth_number']}")
-                        asyncio.create_task(self.instant_broadcast_result(client_id, instant_data))
-                        self.instant_stats['instant_executions'] += 1
-                        return result
-                    
-                    # Обычная обработка через системы
-                    asyncio.create_task(self.process_with_enhanced_systems(
-                        client_id, result, 0.95, 1.0, None, None
-                    ))
-                    
-                    # Быстрая отправка транскрипции
-                    asyncio.create_task(self.broadcast_transcription(
-                        client_id, result, 0.95, 1.0, 0.05
-                    ))
-                    
-                    return result
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"❌ Ultra-fast processing error: {e}")
-            return None
-    
-    def _update_ultra_fast_stats(self, client_id: str):
-        '''Обновление статистики ультра-быстрого режима'''
+                elif pattern_type == 'missing_teeth':
+                    tooth = convert_word(match.group(1))
+                    if 1 <= tooth <= 32:
+                        await self.send_instant_result(client_id, {
+                            'tooth_number': tooth,
+                            'measurement_type': 'missing_teeth',
+                            'values': [tooth],
+                            'message': f"⚡ INSTANT: Tooth {tooth} marked as missing"
+                        })
+                        return True
         
-        current_time = time.time()
+        return False
+
+    async def send_instant_result(self, client_id: str, data: dict):
+        """МГНОВЕННАЯ отправка результата"""
+        message = {
+            "type": "periodontal_update",
+            "client_id": client_id,
+            "success": True,
+            "instant_execution": True,  # КРИТИЧЕСКИЙ флаг
+            **data,
+            "timestamp": time.time(),
+            "system": "ultra_fast_instant_v4"
+        }
         
-        # Время с момента начала команды
-        if hasattr(self, 'segmentation_processor'):
-            buffer_info = self.segmentation_processor.get_client_info(client_id)
-            if buffer_info:
-                command_duration = buffer_info['main_buffer_duration_seconds']
-                
-                # Обновляем среднее время команды
-                if 'ultra_fast_avg_command_time' not in self.stats:
-                    self.stats['ultra_fast_avg_command_time'] = command_duration
-                else:
-                    alpha = 0.1
-                    self.stats['ultra_fast_avg_command_time'] = (
-                        alpha * command_duration + 
-                        (1 - alpha) * self.stats['ultra_fast_avg_command_time']
-                    )
-                
-                # Проверяем достигли ли целевого времени
-                target_time = 1.0  # 1 секунда
-                if command_duration <= target_time:
-                    self.stats['ultra_fast_success_count'] = self.stats.get('ultra_fast_success_count', 0) + 1
-                
-                self.stats['ultra_fast_total_commands'] = self.stats.get('ultra_fast_total_commands', 0) + 1                   
+        # МГНОВЕННАЯ отправка всем веб-клиентам
+        if web_clients:
+            message_json = json.dumps(message)
+            tasks = []
+            for client in list(web_clients):
+                tasks.append(asyncio.create_task(client.send(message_json)))
+            
+            if tasks:
+                try:
+                    await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=0.1)
+                except asyncio.TimeoutError:
+                    pass        
+        
+        
         
     def instant_pattern_match(self, text: str) -> Optional[Dict]:
         """МГНОВЕННОЕ распознавание паттернов БЕЗ LLM"""
@@ -1575,6 +1468,29 @@ class CriticallyFixedProcessorWithSegmentation:
                     'values': [tooth_num],
                     'confidence': 0.98
                 }
+                
+        # специальный паттерн для gingival margin       
+        gingival_pattern = re.compile(r'gingival\s+margin\s+on\s+tooth\s+(\w+)(?:\s+(.*?))?', re.IGNORECASE)
+        gingival_match = gingival_pattern.search(text)
+        
+        if gingival_match:
+            tooth_word = gingival_match.group(1)
+            tooth_num = convert_word(tooth_word)
+            
+            if 1 <= tooth_num <= 32:
+                print(f"✅ INSTANT: Gingival margin pattern matched - tooth {tooth_num}")
+                
+                # Парсим значения gingival margin
+                values_text = gingival_match.group(2) if gingival_match.group(2) else ""
+                values = self._parse_gingival_margin_instant(values_text)
+                
+                if values and len(values) == 3:
+                    return {
+                        'type': 'gingival_margin',
+                        'tooth_number': tooth_num,
+                        'values': values,
+                        'confidence': 0.98
+                    }        
         
         return None    
     
@@ -1679,99 +1595,37 @@ class CriticallyFixedProcessorWithSegmentation:
             self.stats['integrity_verified'] = False
     
     def process_audio_chunk(self, client_id, audio_chunk):
-        """
-        ГЛАВНАЯ ФУНКЦИЯ: Обработка аудио чанков с КРИТИЧЕСКИ ИСПРАВЛЕННОЙ сегментацией
-        """
+        """УСКОРЕННАЯ обработка с instant проверкой"""
         try:
             self.stats['chunks_processed'] += 1
             
-            # Валидация входных данных
-            if len(audio_chunk) == 0:
+            if len(audio_chunk) == 0 or np.any(np.isnan(audio_chunk)) or np.any(np.isinf(audio_chunk)):
                 return None
             
-            if np.any(np.isnan(audio_chunk)) or np.any(np.isinf(audio_chunk)):
-                logger.warning(f"⚠️ Invalid audio chunk from {client_id}")
-                return None
-            
-            # Нормализация
             audio_chunk = np.clip(audio_chunk, -1.0, 1.0)
             
-            # ИСПОЛЬЗОВАНИЕ КРИТИЧЕСКИ ИСПРАВЛЕННОГО ПРОЦЕССОРА СЕГМЕНТАЦИИ
             if self.segmentation_processor:
                 result = self.segmentation_processor.process_audio_chunk(client_id, audio_chunk)
-                # НОВОЕ: Предиктивная проверка на частичных буферах
-                buffer_info = self.segmentation_processor.get_client_info(client_id)
-                if buffer_info and buffer_info['main_buffer_duration_seconds'] > 1.5:
-                    # Есть достаточно аудио для предиктивной проверки
-                    buffer = self.segmentation_processor.client_buffers.get(client_id)
-                    if buffer and len(buffer.audio_buffer) > 24000:  # 1.5 секунды
-                        # Быстрая предварительная транскрипция
-                        quick_text = self.asr.quick_preview_transcribe(buffer.audio_buffer[-24000:])
-                        if quick_text and len(quick_text.split()) >= 6:
-                            # Проверяем на instant patterns
-                            instant_data = self.instant_pattern_match(quick_text)
-                            if instant_data:
-                                print(f"🔮 PREDICTIVE INSTANT: '{quick_text}'")
-                                # Можем начать подготовку результата заранее
-                                asyncio.create_task(self._prepare_instant_result(client_id, instant_data, quick_text))
+                
                 if result and result.strip():
-                    # Команда полностью сегментирована - обрабатываем
-                    logger.info(f"🎯 CRITICALLY FIXED SEGMENTED COMMAND from {client_id}: '{result}'")
+                    # ⚡ МГНОВЕННАЯ ПРОВЕРКА ПЕРВОЙ
+                    instant_executed = asyncio.create_task(self.check_instant_patterns(result, client_id))
                     
-                    # Обновляем статистику сегментации
-                    try:
-                        client_info = self.segmentation_processor.get_client_info(client_id)
-                        if client_info:
-                            self.stats['segmentation_false_starts'] = client_info['stats'].get('false_starts', 0)
-                            self.stats['segmentation_successful_commands'] = client_info['stats'].get('successful_commands', 0)
-                            self.stats['commands_segmented'] = client_info['stats'].get('commands_segmented', 0)
-                            self.stats['chunks_duplicated'] = client_info['stats'].get('chunks_duplicated', 0)
-                            self.stats['chunks_skipped'] = client_info['stats'].get('chunks_skipped', 0)
-                            self.stats['sequence_errors'] = client_info['stats'].get('sequence_errors', 0)
-                        
-                        # Получаем улучшенную статистику
-                        seg_stats = self.segmentation_processor.get_critically_fixed_stats()
-                        self.stats.update({
-                            'average_command_duration': seg_stats.get('average_command_duration', 0.0),
-                            'segmentation_accuracy': seg_stats.get('average_segmentation_accuracy', 100.0),
-                            'segmentation_quality_score': seg_stats.get('segmentation_quality_score', 100.0),
-                            'integrity_verified': seg_stats.get('integrity_verified', True)
-                        })
-                        
-                        # КРИТИЧЕСКИЙ МОНИТОРИНГ
-                        if self.stats['chunks_duplicated'] > 0:
-                            logger.error(f"❌ CRITICAL: {self.stats['chunks_duplicated']} chunks duplicated!")
-                        if self.stats['chunks_skipped'] > 0:
-                            logger.warning(f"⚠️ WARNING: {self.stats['chunks_skipped']} chunks skipped!")
-                        
-                    except Exception as e:
-                        logger.debug(f"Error updating segmentation stats: {e}")
+                    # Обычная обработка только если не instant
+                    if not instant_executed:
+                        asyncio.create_task(self.process_with_enhanced_systems(
+                            client_id, result, 0.95, 2.0, None, None
+                        ))
                     
-                    # Запуск обработки команд
-                    confidence = 0.95  # Высокая уверенность для сегментированных команд
-                    duration = self.stats.get('average_command_duration', 2.0)
-                    
-                    asyncio.create_task(self.process_with_enhanced_systems(
-                        client_id, result, confidence, duration, None, None
-                    ))
-                    
-                    # Отправка в веб-интерфейс
                     asyncio.create_task(self.broadcast_transcription(
-                        client_id, result, confidence, duration, 0.1  # Быстрая обработка
+                        client_id, result, 0.95, 2.0, 0.05
                     ))
                     
                     return result
-                
-                return None
-            else:
-                # КРИТИЧЕСКАЯ ОШИБКА - сегментация недоступна
-                logger.error(f"❌ CRITICAL: Segmentation processor unavailable for {client_id}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"❌ Critical error processing chunk from {client_id}: {e}")
-            self.stats['processing_errors'] += 1
+            
             return None
+        except Exception as e:
+            logger.error(f"❌ Critical error: {e}")
     
     
     async def _prepare_instant_result(self, client_id: str, instant_data: Dict, text: str):
@@ -2279,176 +2133,77 @@ async def handle_web_client(websocket):
         web_clients.discard(websocket)
 
 async def handle_asr_client(websocket):
-    """ОПТИМИЗИРОВАННЫЙ обработчик ASR клиентов с мгновенным выполнением"""
+    """УЛЬТРА-БЫСТРЫЙ обработчик ASR клиентов"""
     client_addr = websocket.remote_address
     client_id = f"{client_addr[0]}_{client_addr[1]}_{int(time.time())}"
     
-    logger.info(f"🎤 ASR клиент подключен: {client_id}")
+    logger.info(f"⚡ ULTRA-FAST ASR client: {client_id}")
     
     try:
-        client_error_count = 0
-        max_client_errors = 20
-        last_ping_time = time.time()
+        instant_commands_count = 0
         chunks_received = 0
-        instant_commands_executed = 0
         
         async for message in websocket:
-            try:
-                if isinstance(message, bytes):
-                    # Стандартная обработка аудио
-                    try:
-                        audio_chunk = np.frombuffer(message, dtype=np.int16).astype(np.float32) / 32768.0
-                        chunks_received += 1
+            if isinstance(message, bytes):
+                try:
+                    audio_chunk = np.frombuffer(message, dtype=np.int16).astype(np.float32) / 32768.0
+                    chunks_received += 1
+                    
+                    if np.any(np.isnan(audio_chunk)) or np.any(np.isinf(audio_chunk)):
+                        continue
+                    
+                    if processor:
+                        result = processor.process_audio_chunk(client_id, audio_chunk)
                         
-                        # Валидация аудио данных
-                        if np.any(np.isnan(audio_chunk)) or np.any(np.isinf(audio_chunk)):
-                            logger.warning(f"⚠️ Невалидные аудио данные от {client_id}")
-                            client_error_count += 1
-                            continue
-                        
-                        # Обработка через процессор
-                        if processor:
-                            result = processor.process_audio_chunk(client_id, audio_chunk)
+                        if result and isinstance(result, str) and result.strip():
+                            # ⚡ КРИТИЧЕСКИЙ ПУТЬ: МГНОВЕННАЯ ПРОВЕРКА
+                            start_time = time.time()
                             
-                            if result and isinstance(result, str) and result.strip():
-                                # ⚡ КРИТИЧЕСКАЯ ОПТИМИЗАЦИЯ: Проверяем instant patterns ПЕРВЫМИ
-                                start_time = time.time()
-                                instant_data = processor.instant_pattern_match(result)
+                            if await processor.check_instant_patterns(result, client_id):
+                                instant_commands_count += 1
+                                execution_time = (time.time() - start_time) * 1000
                                 
-                                if instant_data:
-                                    # МГНОВЕННОЕ выполнение
-                                    print(f"⚡ INSTANT EXECUTION: {instant_data['type']} for tooth {instant_data['tooth_number']}")
-                                    
-                                    # Обновляем статистику
-                                    processor.instant_stats['instant_executions'] += 1
-                                    processor.instant_stats['llm_bypassed'] += 1
-                                    
-                                    # Примерное время, сэкономленное на LLM вызове
-                                    time_saved = 1200  # среднее время LLM вызова в ms
-                                    processor.instant_stats['time_saved_ms'] += time_saved
-                                    
-                                    instant_commands_executed += 1
-                                    
-                                    # МГНОВЕННАЯ отправка результата
-                                    await processor.instant_broadcast_result(client_id, instant_data)
-                                    
-                                    # Отправляем транскрипцию клиенту
-                                    try:
-                                        await asyncio.wait_for(websocket.send(result), timeout=1.0)
-                                    except asyncio.TimeoutError:
-                                        logger.warning(f"⚠️ Timeout sending result to {client_id}")
-                                    
-                                    execution_time = (time.time() - start_time) * 1000
-                                    print(f"⚡ INSTANT completed in {execution_time:.1f}ms (saved ~{time_saved}ms)")
-                                    
-                                    # Показываем обновленную статистику
-                                    stats = processor.stats
-                                    print(f"\n{'⚡' * 60}")
-                                    print(f"   ULTRA-FAST FASTWHISPER + INSTANT COMMANDS")
-                                    print(f"   🎤 COMMAND: '{result.upper()}'")
-                                    print(f"   👤 {client_addr[0]} | 📊 {chunks_received} chunks")
-                                    print(f"   ⚡ Instant: {instant_commands_executed} | 🚫 LLM bypassed: {processor.instant_stats['llm_bypassed']}")
-                                    print(f"   ⏱️ Time saved: {processor.instant_stats['time_saved_ms']/1000:.1f}s")
-                                    print(f"   🎯 Commands: {stats['commands_segmented']} | Success: {stats.get('segmentation_successful_commands', 0)}")
-                                    print(f"   🌐 {len(web_clients)} web clients | 🔧 Mode: INSTANT+SEGMENTATION_V3")
-                                    print('⚡' * 60 + "\n")
-                                    
-                                    # НЕ запускаем медленные системы - экономим время!
-                                    continue
+                                print(f"⚡ INSTANT: {execution_time:.1f}ms - '{result}'")
                                 
-                                # Если не instant - запускаем обычную обработку
-                                asyncio.create_task(
-                                    processor.process_with_enhanced_systems(client_id, result, 0.95, 2.0)
-                                )
+                                # МГНОВЕННАЯ отправка результата клиенту
+                                await asyncio.wait_for(websocket.send(result), timeout=0.5)
                                 
-                                try:
-                                    await asyncio.wait_for(websocket.send(result), timeout=2.0)
-                                    
-                                    # Показываем стандартную статистику
-                                    stats = processor.stats
-                                    print(f"\n{'🎯' * 60}")
-                                    print(f"   STANDARD PROCESSING: '{result.upper()}'")
-                                    print(f"   👤 {client_addr[0]} | 📊 {chunks_received} chunks")
-                                    print(f"   🎯 Commands: {stats['commands_segmented']} | Success: {stats['successful_commands']}")
-                                    print('🎯' * 60 + "\n")
-                                    
-                                except asyncio.TimeoutError:
-                                    logger.warning(f"⚠️ Timeout sending result to {client_id}")
-                                    client_error_count += 1
-                            else:
-                                await websocket.send("NO_SPEECH")
+                                # Статистика
+                                print(f"📊 Total: {chunks_received} chunks, {instant_commands_count} instant")
+                                continue  # НЕ запускаем медленные системы!
+                            
+                            # Только если НЕ instant - запускаем обычную обработку
+                            asyncio.create_task(
+                                processor.process_with_enhanced_systems(client_id, result, 0.95, 2.0)
+                            )
+                            
+                            await asyncio.wait_for(websocket.send(result), timeout=1.0)
                         else:
-                            await websocket.send("SERVER_NOT_READY")
-                            
-                    except Exception as e:
-                        logger.error(f"❌ Ошибка обработки аудио от {client_id}: {e}")
-                        client_error_count += 1
+                            await websocket.send("NO_SPEECH")
+                    else:
+                        await websocket.send("SERVER_NOT_READY")
                         
-                elif isinstance(message, str):
-                    # Обработка текстовых команд
-                    current_time = time.time()
+                except Exception as e:
+                    logger.error(f"❌ Audio processing error: {e}")
                     
-                    if message == "PING":
-                        await websocket.send("PONG")
-                        last_ping_time = current_time
+            elif isinstance(message, str):
+                # Быстрая обработка текстовых команд
+                if message == "PING":
+                    await websocket.send("PONG")
+                elif message == "STATS":
+                    if processor:
+                        stats = processor.stats.copy()
+                        stats['instant_commands'] = instant_commands_count
+                        stats['instant_mode'] = 'ULTRA_FAST_V4'
+                        await asyncio.wait_for(websocket.send(json.dumps(stats)), timeout=1.0)
                         
-                    elif message == "STATS":
-                        if processor:
-                            stats = processor.stats.copy()
-                            
-                            # Добавляем instant статистику
-                            stats.update(processor.instant_stats)
-                            
-                            stats['model_info'] = processor.asr.get_info()
-                            stats['server_uptime'] = current_time - stats['server_uptime_start']
-                            
-                            # Добавляем статистику сегментации
-                            if processor.segmentation_processor:
-                                seg_stats = processor.segmentation_processor.get_critically_fixed_stats()
-                                stats.update(seg_stats)
-                            
-                            try:
-                                await asyncio.wait_for(websocket.send(json.dumps(stats)), timeout=3.0)
-                            except asyncio.TimeoutError:
-                                logger.warning(f"⚠️ Timeout sending stats to {client_id}")
-                    
-                    elif message == "MODEL_INFO":
-                        if processor:
-                            model_info = processor.asr.get_info()
-                            model_info.update({
-                                'instant_commands_enabled': True,
-                                'instant_executions': processor.instant_stats['instant_executions'],
-                                'llm_calls_bypassed': processor.instant_stats['llm_bypassed'],
-                                'time_saved_seconds': processor.instant_stats['time_saved_ms'] / 1000,
-                                'optimization_level': 'ULTRA_FAST_INSTANT_V3',
-                                'response_time_target_ms': 50,
-                                'llm_bypass_rate_percent': (processor.instant_stats['llm_bypassed'] / 
-                                                           max(1, processor.stats['commands_processed'])) * 100
-                            })
-                            
-                            try:
-                                await asyncio.wait_for(websocket.send(json.dumps(model_info)), timeout=3.0)
-                            except asyncio.TimeoutError:
-                                logger.warning(f"⚠️ Timeout sending model info to {client_id}")
-                
-                # Проверка количества ошибок
-                if client_error_count > max_client_errors:
-                    logger.error(f"❌ Too many errors from {client_id}, disconnecting")
-                    break
-                    
-            except Exception as e:
-                logger.error(f"❌ Critical error handling message from {client_id}: {e}")
-                client_error_count += 1
-                
     except websockets.exceptions.ConnectionClosed:
-        logger.info(f"🎤 ASR клиент отключен: {client_id}")
+        logger.info(f"⚡ Ultra-fast client disconnected: {client_id}")
     except Exception as e:
-        logger.error(f"❌ ASR client error: {e}")
+        logger.error(f"❌ Ultra-fast client error: {e}")
     finally:
-        # Очистка буферов
-        if processor and hasattr(processor, 'segmentation_processor') and processor.segmentation_processor:
+        if processor and hasattr(processor, 'segmentation_processor'):
             processor.segmentation_processor.cleanup_client(client_id)
-            logger.debug(f"🗑️ Cleaned up buffers for {client_id}")
 
 
 async def periodic_stats():

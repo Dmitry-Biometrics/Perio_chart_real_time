@@ -289,7 +289,50 @@ class FixedLLMPeriodontalIntegration:
             'liberal_detections': 0
         }
 
-
+    async def _send_llm_result_to_web_clients(self, llm_result: Dict):
+        """Отправка LLM результата веб-клиентам"""
+        
+        # Получаем ссылку на веб-клиентов
+        try:
+            # Импортируем глобальную переменную
+            from new_server import web_clients
+            
+            if web_clients:
+                # Формируем сообщение
+                message = {
+                    "type": "periodontal_update",
+                    "success": True,
+                    "tooth_number": llm_result.get("tooth_number"),
+                    "measurement_type": llm_result.get("measurement_type"),
+                    "surface": llm_result.get("surface"),
+                    "position": llm_result.get("position"),
+                    "values": llm_result.get("values"),
+                    "measurements": llm_result.get("measurements"),
+                    "confidence": llm_result.get("confidence", 0.0),
+                    "message": llm_result.get("message"),
+                    "timestamp": llm_result.get("timestamp"),
+                    "system": "fixed_llm_periodontal_direct_send"
+                }
+                
+                import json
+                message_json = json.dumps(message)
+                
+                # Отправляем всем клиентам
+                disconnected = set()
+                for client in list(web_clients):
+                    try:
+                        await client.send(message_json)
+                        print(f"✅ LLM result sent to web client")
+                    except:
+                        disconnected.add(client)
+                
+                for client in disconnected:
+                    web_clients.discard(client)
+                    
+                print(f"🚀 LLM RESULT SENT: {llm_result.get('message')}")
+                    
+        except Exception as e:
+            print(f"❌ Error sending LLM result: {e}")
 # Глобальный экземпляр ИСПРАВЛЕННОЙ интеграции
 fixed_llm_integration = None
 

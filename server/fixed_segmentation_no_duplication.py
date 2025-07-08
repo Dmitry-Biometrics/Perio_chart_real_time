@@ -68,12 +68,12 @@ class FixedClientBufferNoDrop:
         self.speech_counter = 0
         
         # ИСПРАВЛЕННЫЕ пороги - более чувствительные
-        self.speech_threshold = config.get('segmentation_speech_threshold', 0.15)  # Понижено с 0.35
+        self.speech_threshold = config.get('segmentation_speech_threshold', 0.25)  # Понижено с 0.35
         self.silence_threshold = config.get('segmentation_silence_threshold', 0.15)  # Понижено с 0.25
         self.min_command_duration = config.get('min_command_duration', 0.8)
         self.max_command_duration = config.get('max_command_duration', 20.0)
         self.speech_confirmation_chunks = config.get('speech_confirmation_chunks', 1)  # Понижено с 3
-        self.silence_confirmation_chunks = config.get('silence_confirmation_chunks', 2)  # Понижено с 8
+        self.silence_confirmation_chunks = config.get('silence_confirmation_chunks', 1)  # Понижено с 8
         
         # Энергетические пороги
         self.energy_threshold = 0.001
@@ -106,54 +106,6 @@ class FixedClientBufferNoDrop:
         logger.info(f"   Speech threshold: {self.speech_threshold} (more sensitive)")
         logger.info(f"   Confirmation chunks: {self.speech_confirmation_chunks} (faster)")
         logger.info(f"   Pre-buffer size: {self.pre_buffer.maxlen} chunks")
-    
-    
-    def enable_ultra_fast_mode(self):
-        '''Включение ультра-быстрого режима'''
-        self.speech_confirmation_chunks = 1
-        self.silence_confirmation_chunks = 2
-        self.min_command_duration = 0.3
-        self.ultra_fast_mode = True
-        
-        # Новые пороги
-        self.speech_threshold = 0.15
-        self.silence_threshold = 0.1
-        
-        print(f"⚡ ULTRA-FAST MODE enabled for {getattr(self, 'client_id', 'unknown')}")
-
-    def detect_energy_spike(self, audio_chunk):
-        '''Детекция пика энергии для досрочного завершения'''
-        import numpy as np
-        from collections import deque
-
-        if not hasattr(self, 'energy_history'):
-            self.energy_history = deque(maxlen=10)
-        
-        current_energy = np.sqrt(np.mean(audio_chunk ** 2))
-        self.energy_history.append(current_energy)
-        
-        if len(self.energy_history) >= 5:
-            recent_avg = np.mean(list(self.energy_history)[-3:])
-            baseline_avg = np.mean(list(self.energy_history)[:-3])
-            
-            # Если энергия резко упала - возможен конец команды
-            if baseline_avg > 0 and recent_avg < baseline_avg * 0.3:
-                return True
-        
-        return False
-
-    def check_predictive_completion(self):
-        '''Проверка на предиктивное завершение команды'''
-        if len(getattr(self, 'audio_buffer', [])) < 32000:  # Меньше 2 секунд
-            return False
-        
-        # Если есть достаточно аудио и последние чанки тихие
-        if (hasattr(self, 'vad_scores') and 
-            len(self.vad_scores) >= 3 and
-            all(score < 0.2 for score in list(self.vad_scores)[-3:])):
-            return True
-        
-        return False
     
     def process_chunk(self, audio_chunk: np.ndarray, vad_score: float) -> Optional[np.ndarray]:
         """
@@ -568,12 +520,12 @@ class CriticallyFixedAudioProcessor:
         
         # Конфигурация
         self.config = {
-            'segmentation_speech_threshold': 0.15,  # Понижено для лучшей чувствительности
+            'segmentation_speech_threshold': 0.25,  # Понижено для лучшей чувствительности
             'segmentation_silence_threshold': 0.15,  # Понижено
             'min_command_duration': 0.8,
             'max_command_duration': 20.0,
-            'speech_confirmation_chunks':  1,  # Понижено с 3
-            'silence_confirmation_chunks': 2   # Понижено с 8
+            'speech_confirmation_chunks': 2,  # Понижено с 3
+            'silence_confirmation_chunks': 1   # Понижено с 8
         }
         
         # Глобальная статистика
@@ -908,12 +860,12 @@ def run_segmentation_diagnostics():
     
     try:
         test_config = {
-            'segmentation_speech_threshold': 0.15,
+            'segmentation_speech_threshold': 0.25,
             'segmentation_silence_threshold': 0.15,
             'min_command_duration': 0.8,
             'max_command_duration': 20.0,
-            'speech_confirmation_chunks': 1,
-            'silence_confirmation_chunks': 2
+            'speech_confirmation_chunks': 2,
+            'silence_confirmation_chunks': 1
         }
         
         # ИСПРАВЛЕНО: Используем правильное имя класса

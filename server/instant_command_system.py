@@ -138,7 +138,7 @@ class InstantCommandAnalyzer:
             
             # 6. GINGIVAL MARGIN - требует tooth + 3 значения (с знаками)
             CommandPattern(
-                pattern=r'gingival\s+margin\s+on\s+tooth\s+(\d+)(?:\s+((?:minus\s+\d+|plus\s+\d+|\d+)(?:\s+(?:minus\s+\d+|plus\s+\d+|\d+)){0,2}))?',
+                pattern=r'gingival\s+margin\s+on\s+tooth\s+(?:number\s+)?(\w+)(?:\s+((?:\w+[\s]*){3,}))?',
                 required_groups=['tooth', 'values'],
                 completion_rules={
                     'min_required_groups': 2,
@@ -373,10 +373,25 @@ class InstantCommandAnalyzer:
         """Валидация значений gingival margin"""
         if not values_text:
             return False
-            
-        # Проверяем что есть 3 значения (с учетом знаков)
-        values = self._parse_gingival_margin_values(values_text)
-        return len(values) == 3
+        
+        # Конвертация слов в числа
+        word_to_num = {
+            'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
+        }
+        
+        words = values_text.strip().split()
+        numbers = []
+        
+        for word in words:
+            clean_word = word.strip('.,!?;:').lower()
+            if clean_word in word_to_num:
+                numbers.append(word_to_num[clean_word])
+            elif clean_word.isdigit():
+                numbers.append(int(clean_word))
+        
+        # Нужно минимум 3 числа
+        return len(numbers) >= 3
     
     def _parse_gingival_margin_values(self, text: str) -> List[int]:
         """Парсинг значений gingival margin"""

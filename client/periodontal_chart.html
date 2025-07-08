@@ -1032,6 +1032,10 @@
 						// ⭐ ЕДИНСТВЕННАЯ правильная обработка missing_teeth
 						this.handleMissingTeethUpdate(measurements);
 						break;
+						
+					case 'gingival_margin':
+						this.updateGingivalMarginCells(tooth, surface, values);
+						break;	
 					default:
 						console.warn(`⚠️ Unknown measurement type: ${measurementType}`);
 						this.updateCellsFromServer(tooth, measurements);
@@ -1247,20 +1251,32 @@
                 });
             }
             
-            updateGingivalMarginCells(tooth, surface, values) {
-                if (!values || values.length !== 3) return;
-                
-                const surfaceType = surface || 'buccal';
-                console.log(`📐 Updating gingival margin for tooth ${tooth} ${surfaceType}:`, values);
-                
-                values.forEach((margin, index) => {
-                    const element = document.getElementById(`GM-${tooth}-${surfaceType}-${index}`);
-                    if (element) {
-                        this.updateCell(element, margin);
-                        console.log(`✅ Updated GM-${tooth}-${surfaceType}-${index} = ${margin}`);
-                    }
-                });
-            }
+		updateGingivalMarginCells(tooth, surface, values) {
+			if (!values || values.length !== 3) {
+				console.warn(`⚠️ Invalid GM values for tooth ${tooth}:`, values);
+				return;
+			}
+			
+			// ✅ ИСПРАВЛЕНИЕ: Если surface не указана, обновляем обе поверхности
+			const surfacesToUpdate = surface ? [surface] : ['buccal', 'lingual'];
+			
+			surfacesToUpdate.forEach(surfaceType => {
+				console.log(`📐 Updating gingival margin for tooth ${tooth} ${surfaceType}:`, values);
+				
+				values.forEach((margin, index) => {
+					const element = document.getElementById(`GM-${tooth}-${surfaceType}-${index}`);
+					if (element) {
+						this.updateCell(element, margin);
+						console.log(`✅ Updated GM-${tooth}-${surfaceType}-${index} = ${margin}`);
+						
+						// ✅ НОВОЕ: Автоматический расчет CAL после обновления GM
+						this.calculateCAL(element);
+					} else {
+						console.warn(`⚠️ Element not found: GM-${tooth}-${surfaceType}-${index}`);
+					}
+				});
+			});
+		}
             
 			markToothAsMissing(tooth) {
 				console.log(`❌ Marking tooth ${tooth} as missing`);
